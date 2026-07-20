@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -106,6 +107,18 @@ func (s *SettingService) loadWebSearchConfigFromDB() (*WebSearchEmulationConfig,
 
 	raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyWebSearchEmulationConfig)
 	if err != nil {
+		// This setting is optional. A fresh installation has no row yet and must
+		// behave exactly like an explicitly saved disabled configuration. Treating
+		// not-found as an error made the first request fail with 404 while the
+		// error cache caused the immediately following request to succeed.
+		if errors.Is(err, ErrSettingNotFound) {
+			cfg := &WebSearchEmulationConfig{}
+			webSearchEmulationCache.Store(&cachedWebSearchEmulationConfig{
+				config:    cfg,
+				expiresAt: time.Now().Add(webSearchEmulationCacheTTL).UnixNano(),
+			})
+			return cfg, nil
+		}
 		webSearchEmulationCache.Store(&cachedWebSearchEmulationConfig{
 			config:    &WebSearchEmulationConfig{},
 			expiresAt: time.Now().Add(webSearchEmulationErrorTTL).UnixNano(),
