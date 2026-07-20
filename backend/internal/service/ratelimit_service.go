@@ -1771,6 +1771,14 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 
 	result := &SuccessfulTestRecoveryResult{}
 	if account.Status == StatusError {
+		// Terminal upstream errors persistently disable scheduling. Restore the
+		// scheduling flag before clearing StatusError so a partial failure remains
+		// fail-closed and a subsequent recovery attempt can safely retry.
+		if !account.Schedulable {
+			if err := s.accountRepo.SetSchedulable(ctx, accountID, true); err != nil {
+				return nil, err
+			}
+		}
 		if err := s.accountRepo.ClearError(ctx, accountID); err != nil {
 			return nil, err
 		}
