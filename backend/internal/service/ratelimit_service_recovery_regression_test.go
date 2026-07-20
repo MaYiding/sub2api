@@ -53,3 +53,26 @@ func TestRateLimitService_RecoverAccountState_RestoresTerminallyDisabledScheduli
 	require.True(t, repo.setSchedulableValue)
 	require.Equal(t, []string{"set_schedulable", "clear_error"}, repo.callOrder)
 }
+
+func TestRateLimitService_RecoverAccountState_HealsLegacyActiveUnschedulableState(t *testing.T) {
+	repo := &recoverySchedulableRepoStub{
+		rateLimitClearRepoStub: rateLimitClearRepoStub{
+			getByIDAccount: &Account{
+				ID:          74,
+				Status:      StatusActive,
+				Schedulable: false,
+			},
+		},
+	}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+
+	result, err := svc.RecoverAccountState(context.Background(), 74, AccountRecoveryOptions{
+		RestoreSchedulable: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.RestoredSchedulable)
+	require.Equal(t, 1, repo.setSchedulableCalls)
+	require.True(t, repo.setSchedulableValue)
+	require.Equal(t, []string{"set_schedulable"}, repo.callOrder)
+}
