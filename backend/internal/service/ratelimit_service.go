@@ -144,7 +144,7 @@ type ErrorPolicyResult int
 const (
 	ErrorPolicyNone            ErrorPolicyResult = iota // 未命中任何策略，继续默认逻辑
 	ErrorPolicySkipped                                  // 自定义错误码开启但未命中，跳过处理
-	ErrorPolicyMatched                                  // 自定义错误码命中，应停止调度
+	ErrorPolicyMatched                                  // 显式错误码或终态语义命中，应停止调度
 	ErrorPolicyTempUnscheduled                          // 临时不可调度规则命中
 )
 
@@ -166,6 +166,11 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 			return ErrorPolicyTempUnscheduled
 		}
 		return ErrorPolicySkipped
+	}
+	// 终态语义必须优先于用户配置的临时规则；命中后由调用方进入
+	// HandleUpstreamError，统一执行 SetError 和调度缓存失效。
+	if _, ok := classifyTerminalAccountError(account, statusCode, responseBody); ok {
+		return ErrorPolicyMatched
 	}
 	if s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel)) {
 		return ErrorPolicyTempUnscheduled
@@ -196,6 +201,11 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		return false
 	}
 
+	// 显式错误码与终态语义必须先于模型限流、临时规则和普通 429 冷却。
+	if s.handleImmediateAccountDisable(ctx, account, statusCode, responseBody) {
+		return true
+	}
+
 	if len(requestedModel) > 0 && s.HandleUpstreamModelNotFound(ctx, account, requestedModel[0], statusCode, responseBody) {
 		return true
 	}
@@ -223,11 +233,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 	}
 
-	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody))
-	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-	if upstreamMsg != "" {
-		upstreamMsg = truncateForLog([]byte(upstreamMsg), 512)
-	}
+	upstreamMsg := safeUpstreamAccountErrorMessage(responseBody)
 
 	switch statusCode {
 	case 400:
@@ -379,15 +385,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		s.handle529(ctx, account)
 		shouldDisable = false
 	default:
-		// 自定义错误码启用时：在列表中的错误码都应该停止调度
-		if customErrorCodesEnabled {
-			msg := "Custom error code triggered"
-			if upstreamMsg != "" {
-				msg = upstreamMsg
-			}
-			s.handleCustomErrorCode(ctx, account, statusCode, msg)
-			shouldDisable = true
-		} else if statusCode >= 500 {
+		if statusCode >= 500 {
 			// 未启用自定义错误码时：仅记录5xx错误
 			slog.Warn("account_upstream_error", "account_id", account.ID, "status_code", statusCode)
 			shouldDisable = false

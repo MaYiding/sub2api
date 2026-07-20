@@ -568,6 +568,8 @@ type errorPolicyRepoStub struct {
 	mockAccountRepoForGemini
 	tempCalls           int
 	setErrCalls         int
+	rateLimitCalls      int
+	overloadCalls       int
 	lastErrorMsg        string
 	modelRateLimitCalls []modelNotFoundRateLimitCall
 }
@@ -590,4 +592,80 @@ func (r *errorPolicyRepoStub) SetModelRateLimit(_ context.Context, id int64, sco
 	}
 	r.modelRateLimitCalls = append(r.modelRateLimitCalls, call)
 	return nil
+}
+
+func (r *errorPolicyRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	r.rateLimitCalls++
+	return nil
+}
+
+func (r *errorPolicyRepoStub) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
+	r.overloadCalls++
+	return nil
+}
+
+func TestHandleUpstreamError_ExplicitCustomTransientCodesDisable(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "429", statusCode: http.StatusTooManyRequests},
+		{name: "529", statusCode: 529},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &errorPolicyRepoStub{}
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			account := &Account{
+				ID:       90,
+				Type:     AccountTypeAPIKey,
+				Platform: PlatformOpenAI,
+				Credentials: map[string]any{
+					"custom_error_codes_enabled": true,
+					"custom_error_codes":         []any{float64(tt.statusCode)},
+				},
+			}
+
+			shouldDisable := svc.HandleUpstreamError(
+				context.Background(),
+				account,
+				tt.statusCode,
+				http.Header{},
+				[]byte(`{"error":{"message":"configured terminal failure"}}`),
+			)
+
+			require.True(t, shouldDisable)
+			require.Equal(t, 1, repo.setErrCalls)
+			require.Equal(t, 0, repo.rateLimitCalls)
+			require.Equal(t, 0, repo.overloadCalls)
+			require.Contains(t, repo.lastErrorMsg, "Custom error code")
+		})
+	}
+}
+
+func TestHandleUpstreamError_EmptyCustomCodeListKeepsDefault429Policy(t *testing.T) {
+	repo := &errorPolicyRepoStub{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       91,
+		Type:     AccountTypeAPIKey,
+		Platform: PlatformOpenAI,
+		Credentials: map[string]any{
+			"custom_error_codes_enabled": true,
+			"custom_error_codes":         []any{},
+		},
+	}
+
+	shouldDisable := svc.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		http.Header{},
+		[]byte(`{"error":{"type":"rate_limit_error","message":"too many requests"}}`),
+	)
+
+	require.False(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrCalls)
+	require.Equal(t, 1, repo.rateLimitCalls)
 }

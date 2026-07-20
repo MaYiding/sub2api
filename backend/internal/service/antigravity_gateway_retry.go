@@ -1185,6 +1185,12 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return nil
 	}
+	// 显式自定义错误码和账号级终态语义优先于模型级 429。否则该路径会
+	// 直接写 model_rate_limits，绕过 RateLimitService 的永久停用策略。
+	if s.rateLimitService != nil && s.rateLimitService.handleImmediateAccountDisable(ctx, account, statusCode, body) {
+		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d account_auto_disabled account=%d", prefix, statusCode, account.ID)
+		return nil
+	}
 	// 模型级限流处理（优先）
 	result := s.handleModelRateLimit(&handleModelRateLimitParams{
 		ctx:             ctx,

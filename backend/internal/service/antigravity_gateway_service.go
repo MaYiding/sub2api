@@ -216,9 +216,10 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 		}
 		return true, http.StatusInternalServerError, nil
 	case ErrorPolicyMatched:
-		if s.handleAntigravityModelRateLimitBeforePolicy(p, statusCode, headers, respBody) {
-			return true, statusCode, nil
-		}
+		// Matched means an explicit administrator-selected code or a high-confidence
+		// account-wide terminal failure. It must reach handleUpstreamError before
+		// any model-level 429 fallback; otherwise "disable on 429" only cools one
+		// model and the unusable account remains active.
 		_ = p.handleError(p.ctx, p.prefix, p.account, statusCode, headers, respBody,
 			p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
 		return true, statusCode, nil

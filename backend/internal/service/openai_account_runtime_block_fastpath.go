@@ -55,6 +55,15 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		return false
 	}
 
+	// Explicitly configured status codes and high-confidence terminal account errors
+	// must win over capability-specific cooldowns. In particular, image 429s have
+	// their own fast path below and would otherwise bypass account auto-disable.
+	if s != nil && account != nil && s.rateLimitService != nil &&
+		s.rateLimitService.handleImmediateAccountDisable(stateCtx, account, statusCode, responseBody) {
+		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
+		return true
+	}
+
 	if isOpenAIImageRateLimitError(statusCode, responseBody) {
 		if s != nil && s.rateLimitService != nil {
 			_ = s.rateLimitService.HandleOpenAIImageRateLimit(stateCtx, account, statusCode, headers, responseBody)

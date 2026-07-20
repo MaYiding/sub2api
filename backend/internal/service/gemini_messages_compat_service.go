@@ -2839,6 +2839,11 @@ func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Cont
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return
 	}
+	// Gemini 429 有独立的配额路径；在进入该路径前先执行显式管理员策略
+	// 以及高置信终态语义，避免自定义 429 被降级成临时限流。
+	if s.rateLimitService != nil && s.rateLimitService.handleImmediateAccountDisable(ctx, account, statusCode, body) {
+		return
+	}
 	if s.rateLimitService != nil && (statusCode == 401 || statusCode == 403 || statusCode == 529) {
 		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, headers, body)
 		return

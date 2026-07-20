@@ -1178,6 +1178,16 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 	if s == nil || account == nil {
 		return
 	}
+	// Grok 有独立的 401/403/429 冷却路径。订阅/entitlement 已失效或管理员
+	// 显式选择的错误码必须在这里先落为 error，不能只冷却后反复重试。
+	if s.rateLimitService != nil {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		disabled := s.rateLimitService.handleImmediateAccountDisable(stateCtx, account, statusCode, responseBody)
+		cancel()
+		if disabled {
+			return
+		}
+	}
 	now := time.Now()
 	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
 	switch statusCode {
