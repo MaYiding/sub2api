@@ -2316,9 +2316,10 @@ func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedu
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue schedulable change failed: account=%d err=%v", id, err)
 	}
-	if !schedulable {
-		r.syncSchedulerAccountSnapshot(ctx, id)
-	}
+	// Both disabling and re-enabling must be visible immediately. Relying only on
+	// the async outbox for the true transition can leave an account active in the
+	// database but unavailable in the scheduler cache for an observable window.
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
 }
 

@@ -1170,6 +1170,18 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// SetError persistently disables scheduling. Clear-error is its explicit
+	// administrative inverse, so restore scheduling before clearing StatusError.
+	// Keeping the error status until this succeeds preserves fail-closed behavior.
+	if account.Status == StatusError && !account.Schedulable {
+		if err := s.accountRepo.SetSchedulable(ctx, id, true); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
