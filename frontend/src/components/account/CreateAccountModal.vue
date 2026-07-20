@@ -3269,8 +3269,8 @@
   <BaseDialog
     :show="showGeminiHelpDialog"
     :title="t('admin.accounts.gemini.helpDialog.title')"
+    width="wide"
     @close="showGeminiHelpDialog = false"
-    max-width="max-w-3xl"
   >
     <div class="space-y-6">
       <!-- Setup Guide Section -->
