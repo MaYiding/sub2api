@@ -18,12 +18,22 @@ type rateLimit429AccountRepoStub struct {
 	rateLimitCalls     int
 	lastRateLimitID    int64
 	lastRateLimitReset time.Time
+	errorCalls         int
+	lastErrorID        int64
+	lastErrorMessage   string
 }
 
 func (r *rateLimit429AccountRepoStub) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitCalls++
 	r.lastRateLimitID = id
 	r.lastRateLimitReset = resetAt
+	return nil
+}
+
+func (r *rateLimit429AccountRepoStub) SetError(_ context.Context, id int64, errorMsg string) error {
+	r.errorCalls++
+	r.lastErrorID = id
+	r.lastErrorMessage = errorMsg
 	return nil
 }
 

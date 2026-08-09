@@ -507,6 +507,7 @@ func TestHandleGeminiUpstreamError_PoolMode429(t *testing.T) {
 		name              string
 		account           *Account
 		expectRateLimited bool
+		expectDisabled    bool
 	}{
 		{
 			name: "pool_mode_apikey_stays_in_pool",
@@ -530,7 +531,7 @@ func TestHandleGeminiUpstreamError_PoolMode429(t *testing.T) {
 					"custom_error_codes":         []any{float64(429)},
 				},
 			},
-			expectRateLimited: true,
+			expectDisabled: true,
 		},
 		{
 			name: "custom_error_codes_miss_skips",
@@ -577,6 +578,14 @@ func TestHandleGeminiUpstreamError_PoolMode429(t *testing.T) {
 
 			svc.handleGeminiUpstreamError(context.Background(), tt.account, http.StatusTooManyRequests, http.Header{}, body)
 
+			if tt.expectDisabled {
+				require.Zero(t, repo.rateLimitCalls, "显式自定义错误码不应降级为临时限流")
+				require.Equal(t, 1, repo.errorCalls)
+				require.Equal(t, tt.account.ID, repo.lastErrorID)
+				require.Contains(t, repo.lastErrorMessage, "exhausted your capacity")
+				return
+			}
+			require.Zero(t, repo.errorCalls)
 			if !tt.expectRateLimited {
 				require.Zero(t, repo.rateLimitCalls, "池模式账号不应被标记账号级限流")
 				return
