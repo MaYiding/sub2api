@@ -107,10 +107,7 @@ func (s *SettingService) loadWebSearchConfigFromDB() (*WebSearchEmulationConfig,
 
 	raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyWebSearchEmulationConfig)
 	if err != nil {
-		// This setting is optional. A fresh installation has no row yet and must
-		// behave exactly like an explicitly saved disabled configuration. Treating
-		// not-found as an error made the first request fail with 404 while the
-		// error cache caused the immediately following request to succeed.
+		// Missing key is the normal first-boot state: return empty disabled config.
 		if errors.Is(err, ErrSettingNotFound) {
 			cfg := &WebSearchEmulationConfig{}
 			webSearchEmulationCache.Store(&cachedWebSearchEmulationConfig{
