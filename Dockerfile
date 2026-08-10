@@ -7,13 +7,14 @@
 # Stage 3: Final minimal image
 # =============================================================================
 
-ARG NODE_IMAGE=node:24-alpine
-ARG GOLANG_IMAGE=golang:1.26.5-alpine
-ARG ALPINE_IMAGE=alpine:3.21
-ARG POSTGRES_IMAGE=postgres:18-alpine
+ARG NODE_IMAGE=node:24.19.0-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+ARG GOLANG_IMAGE=golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2
+ARG ALPINE_IMAGE=alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+ARG POSTGRES_IMAGE=postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
+ARG PNPM_VERSION=9.15.9
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -22,17 +23,36 @@ ARG NPM_CONFIG_REGISTRY=
 # it on the native host arch instead of under QEMU emulation for the target.
 FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS frontend-builder
 ARG NPM_CONFIG_REGISTRY
+ARG PNPM_VERSION
 
 WORKDIR /app/frontend
 
-# Install pnpm (pinned to v9 to match CI and keep builds reproducible)
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Install the exact pnpm version validated by CI. Corepack has its own registry
+# setting (it does not read pnpm's registry configuration while downloading the
+# package-manager binary), so explicitly route both downloads through the same
+# optional public registry. The cache and bounded retries make transient network
+# failures recoverable without bypassing Corepack's signature/integrity checks.
+RUN --mount=type=cache,id=sub2api-corepack,target=/root/.cache/node/corepack \
+    corepack enable && \
+    export COREPACK_NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}" && \
+    attempt=1 && \
+    until corepack install --global "pnpm@${PNPM_VERSION}"; do \
+      if [ "${attempt}" -ge 3 ]; then exit 1; fi; \
+      sleep "$((attempt * 5))"; \
+      attempt="$((attempt + 1))"; \
+    done && \
+    test "$(corepack pnpm@${PNPM_VERSION} --version)" = "${PNPM_VERSION}"
 
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
-    if [ -n "${NPM_CONFIG_REGISTRY}" ]; then pnpm config set registry "${NPM_CONFIG_REGISTRY}"; fi && \
-    pnpm install --frozen-lockfile --prefer-offline
+RUN --mount=type=cache,id=sub2api-corepack,target=/root/.cache/node/corepack \
+    --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
+    export COREPACK_NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}" && \
+    if [ -n "${NPM_CONFIG_REGISTRY}" ]; then corepack pnpm@${PNPM_VERSION} config set registry "${NPM_CONFIG_REGISTRY}"; fi && \
+    CI=true corepack pnpm@${PNPM_VERSION} install --frozen-lockfile --prefer-offline \
+      --fetch-retries=5 \
+      --fetch-retry-mintimeout=10000 \
+      --fetch-retry-maxtimeout=60000
 
 # Copy frontend source and build.
 # LegalDocumentView.vue (admin-compliance gate) build-time imports
@@ -41,7 +61,9 @@ RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/stor
 # Copy only that subtree to keep the build dependency minimal.
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
-RUN pnpm run build
+RUN --mount=type=cache,id=sub2api-corepack,target=/root/.cache/node/corepack \
+    export COREPACK_NPM_REGISTRY="${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}" && \
+    corepack pnpm@${PNPM_VERSION} run build
 
 # -----------------------------------------------------------------------------
 # Stage 2: Backend Builder
