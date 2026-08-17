@@ -109,6 +109,10 @@ function sameTokens(left, right) {
   return left && right && ['access_token', 'refresh_token', 'id_token'].every(key => left[key] === right[key])
 }
 
+function hasStaleReauthState(local) {
+  return local.value.requires_reauth === true || Boolean(local.value.reauth_reason)
+}
+
 function serverTokenTimestamp(updatedAt) {
   const time = Date.parse(updatedAt || '')
   return Number.isFinite(time) ? Math.floor(time / 1000) : Math.floor(Date.now() / 1000)
@@ -246,6 +250,8 @@ function writeLocalFromServer(local, serverAccount, serverMeta) {
     token_generation: (Number(local.value.token_generation) || 0) + 1,
     token_updated_at: serverTokenTimestamp(serverMeta.updated_at),
     token_source_mode: 'managed',
+    requires_reauth: false,
+    reauth_reason: '',
     tokens: {
       ...(local.value.tokens || {}),
       ...serverTokens,
@@ -334,8 +340,17 @@ function main() {
 
     if (sameTokens(local.credentials, serverTokens)) {
       if (!dryRun) {
-        state.accounts[email] = stateFor(local, serverMeta)
+        if (hasStaleReauthState(local)) {
+          writeLocalFromServer(local, serverAccount, serverMeta)
+          const updatedLocal = loadLocalAccounts().get(email)
+          state.accounts[email] = stateFor(updatedLocal, serverMeta)
+          log(`cleared stale reauth state ${email}`)
+        } else {
+          state.accounts[email] = stateFor(local, serverMeta)
+        }
         changed = true
+      } else if (hasStaleReauthState(local)) {
+        log(`would clear stale reauth state ${email}`)
       }
       if (dryRun) log(`would reconcile ${email}`)
       continue
