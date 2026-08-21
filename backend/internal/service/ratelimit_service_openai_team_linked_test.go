@@ -101,14 +101,15 @@ func TestTeamLinkedError_FanoutMarksSameTeamAccounts(t *testing.T) {
 	shouldDisable := rl.HandleUpstreamError(context.Background(), &trigger, http.StatusPaymentRequired, http.Header{}, []byte(teamLinkedDeactivatedBody))
 
 	require.True(t, shouldDisable)
-	// fan-out 先标记同队兄弟（#2、#6），触发账户 #1 随后由常规 case 402 标记
+	// fan-out 先标记同队兄弟（#2、#6），触发账户 #1 随后由 dev 终止错误策略标记
 	require.Equal(t, []int64{2, 6, 1}, repo.setErrorIDs)
 	require.Contains(t, repo.setErrorMsgs[2], "team-linked error triggered by account #1")
 	require.Contains(t, repo.setErrorMsgs[6], "team-linked error triggered by account #1")
-	require.Contains(t, repo.setErrorMsgs[1], "Workspace deactivated (402)")
+	require.Contains(t, repo.setErrorMsgs[1], "Auto-disabled terminal upstream error [account_disabled] (HTTP 402)")
+	require.Contains(t, repo.setErrorMsgs[1], "This workspace has been deactivated.")
 	require.NotContains(t, repo.setErrorMsgs[1], "team-linked")
-	// 熔断顺序：兄弟账户先于落库全部进程内熔断，触发账户走 auth_error
-	require.Equal(t, []string{openAITeamLinkedErrorBlockReason, openAITeamLinkedErrorBlockReason, "auth_error"}, blocker.reasons)
+	// 熔断顺序：兄弟账户先于落库全部进程内熔断，触发账户走 dev 终止错误策略
+	require.Equal(t, []string{openAITeamLinkedErrorBlockReason, openAITeamLinkedErrorBlockReason, "terminal_account_disabled"}, blocker.reasons)
 	require.Equal(t, int64(2), blocker.accounts[0].ID)
 	require.Equal(t, int64(6), blocker.accounts[1].ID)
 	require.Equal(t, int64(1), blocker.accounts[2].ID)
