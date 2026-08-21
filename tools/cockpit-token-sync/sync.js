@@ -17,6 +17,13 @@ const SERVER_HOST = process.env.SUB2API_SYNC_HOST || '104.36.67.199'
 const SERVER_USER = process.env.SUB2API_SYNC_USER || 'root'
 const SERVER_API = 'http://127.0.0.1:8080/api/v1'
 const ACCOUNT_PAGE_SIZE = 200
+const TOKEN_KEYS = ['access_token', 'refresh_token', 'id_token']
+const OPTIONAL_CREDENTIAL_KEYS = [
+  'client_id',
+  'scope',
+  'token_type',
+]
+const TIMESTAMP_CREDENTIAL_KEYS = ['expires_at', 'subscription_expires_at']
 
 const dryRun = process.argv.includes('--dry-run')
 
@@ -41,6 +48,24 @@ function writeJson0600(filePath, value) {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`
+}
+
+function decodeJwtPayload(token) {
+  if (typeof token !== 'string') return null
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
+function accessTokenExpiresAt(token) {
+  const payload = decodeJwtPayload(token)
+  const exp = Number(payload && payload.exp)
+  if (!Number.isFinite(exp) || exp <= 0) return null
+  return new Date(Math.floor(exp) * 1000).toISOString()
 }
 
 function decryptAccount(filePath) {
@@ -78,15 +103,14 @@ function encryptAccount(value, previousEnvelope) {
 
 function tokenSet(account) {
   const tokens = account.tokens || {}
-  const required = ['access_token', 'refresh_token', 'id_token']
-  if (required.some(key => typeof tokens[key] !== 'string' || tokens[key].length === 0)) return null
-  return Object.fromEntries(required.map(key => [key, tokens[key]]))
+  if (TOKEN_KEYS.some(key => typeof tokens[key] !== 'string' || tokens[key].length === 0)) return null
+  return Object.fromEntries(TOKEN_KEYS.map(key => [key, tokens[key]]))
 }
 
 function credentialsFromLocal(account) {
   const tokens = tokenSet(account)
   if (!tokens) return null
-  return {
+  const credentials = {
     ...tokens,
     email: account.email,
     chatgpt_account_id: account.account_id,
@@ -95,18 +119,53 @@ function credentialsFromLocal(account) {
     plan_type: account.plan_type,
     subscription_expires_at: account.subscription_active_until,
   }
+  const expiresAt = accessTokenExpiresAt(tokens.access_token)
+  if (expiresAt) credentials.expires_at = expiresAt
+  for (const key of OPTIONAL_CREDENTIAL_KEYS) {
+    if (typeof account[key] === 'string' && account[key].length > 0) {
+      credentials[key] = account[key]
+    }
+  }
+  return Object.fromEntries(Object.entries(credentials).filter(([, value]) => value !== undefined && value !== null && value !== ''))
 }
 
 function credentialsFromServer(account) {
   const credentials = account && account.credentials
   if (!credentials) return null
-  const required = ['access_token', 'refresh_token', 'id_token']
-  if (required.some(key => typeof credentials[key] !== 'string' || credentials[key].length === 0)) return null
-  return Object.fromEntries(required.map(key => [key, credentials[key]]))
+  if (TOKEN_KEYS.some(key => typeof credentials[key] !== 'string' || credentials[key].length === 0)) return null
+  const selected = Object.fromEntries(TOKEN_KEYS.map(key => [key, credentials[key]]))
+  for (const key of ['expires_at', ...OPTIONAL_CREDENTIAL_KEYS, 'email', 'chatgpt_account_id', 'chatgpt_user_id', 'organization_id', 'plan_type', 'subscription_expires_at']) {
+    if (credentials[key] !== undefined && credentials[key] !== null && credentials[key] !== '') {
+      selected[key] = credentials[key]
+    }
+  }
+  return selected
 }
 
 function sameTokens(left, right) {
-  return left && right && ['access_token', 'refresh_token', 'id_token'].every(key => left[key] === right[key])
+  return left && right && TOKEN_KEYS.every(key => left[key] === right[key])
+}
+
+function comparableCredentialValue(key, value) {
+  if (TIMESTAMP_CREDENTIAL_KEYS.includes(key)) {
+    const parsed = Date.parse(String(value || ''))
+    if (Number.isFinite(parsed)) return Math.floor(parsed / 1000)
+  }
+  return value
+}
+
+function sameCredentialFields(expected, actual, includeTokens = true) {
+  if (!expected || !actual) return false
+  return Object.entries(expected)
+    .filter(([key]) => includeTokens || !TOKEN_KEYS.includes(key))
+    .every(([key, value]) => comparableCredentialValue(key, value) === comparableCredentialValue(key, actual[key]))
+}
+
+function mergeServerCredentials(serverAccount, localCredentials) {
+  return {
+    ...((serverAccount && serverAccount.credentials) || {}),
+    ...localCredentials,
+  }
 }
 
 function hasStaleReauthState(local) {
@@ -179,11 +238,11 @@ function exportServerAccounts(ids = []) {
   return Array.isArray(payload.accounts) ? payload.accounts : []
 }
 
-function applyServerCredentials(id, credentials) {
+function applyServerCredentials(id, credentials, serverAccount = null) {
   const response = remoteRequest(
     `/admin/accounts/${encodeURIComponent(id)}/apply-oauth-credentials`,
     'POST',
-    JSON.stringify({ type: 'oauth', credentials }),
+    JSON.stringify({ type: 'oauth', credentials: mergeServerCredentials(serverAccount, credentials) }),
   )
   if (response && response.code !== undefined && response.code !== 0) {
     fail(`server rejected OAuth credentials for account ${id}`)
@@ -329,16 +388,34 @@ function main() {
       local.fileMtimeMs > Number(previous.local_file_mtime_ms || 0) + 1
     )
     const serverChanged = (serverMeta.updated_at || '') !== (previous.server_updated_at || '')
-    if (!localChanged && !serverChanged) continue
+    const serverMetadataChanged = !sameCredentialFields(
+      local.credentials,
+      serverMeta.credentials || {},
+      false,
+    )
+    if (!localChanged && !serverChanged && !serverMetadataChanged) continue
 
     const serverAccount = getExport([serverMeta.id]).find(account => account.name === email)
-    const serverTokens = credentialsFromServer(serverAccount)
-    if (!serverTokens) {
+    const serverCredentials = credentialsFromServer(serverAccount)
+    if (!serverCredentials) {
       log(`blocked ${email}: server OAuth credentials are incomplete`)
       continue
     }
 
-    if (sameTokens(local.credentials, serverTokens)) {
+    if (sameTokens(local.credentials, serverCredentials) && !sameCredentialFields(local.credentials, serverCredentials)) {
+      if (dryRun) {
+        log(`would push ${email}: Cockpit credentials -> server`)
+      } else {
+        applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+        const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
+        state.accounts[email] = stateFor(local, refreshedMeta)
+        changed = true
+        log(`pushed ${email}: Cockpit credentials -> server`)
+      }
+      continue
+    }
+
+    if (sameTokens(local.credentials, serverCredentials)) {
       if (!dryRun) {
         if (hasStaleReauthState(local)) {
           writeLocalFromServer(local, serverAccount, serverMeta)
@@ -378,7 +455,7 @@ function main() {
       if (dryRun) {
         log(`would push ${email}: Cockpit -> server`)
       } else {
-        applyServerCredentials(serverMeta.id, local.credentials)
+        applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
         const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
         state.accounts[email] = stateFor(local, refreshedMeta)
         changed = true
@@ -391,9 +468,20 @@ function main() {
   log(`completed: local=${localByEmail.size}, server_oauth=${serverMetas.length}, dry_run=${dryRun}`)
 }
 
-try {
-  main()
-} catch (error) {
-  log(`ERROR: ${error instanceof Error ? error.message : 'sync failed'}`)
-  process.exitCode = 1
+if (require.main === module) {
+  try {
+    main()
+  } catch (error) {
+    log(`ERROR: ${error instanceof Error ? error.message : 'sync failed'}`)
+    process.exitCode = 1
+  }
+}
+
+module.exports = {
+  accessTokenExpiresAt,
+  credentialsFromLocal,
+  credentialsFromServer,
+  mergeServerCredentials,
+  sameCredentialFields,
+  sameTokens,
 }
