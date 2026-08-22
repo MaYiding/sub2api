@@ -44,6 +44,13 @@ func TestClassifyTerminalAccountError(t *testing.T) {
 			want:       false,
 		},
 		{
+			name:       "openai_oauth_401_account_disabled_keeps_refresh_policy",
+			account:    &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			statusCode: http.StatusUnauthorized,
+			body:       `{"error":{"message":"account is disabled"}}`,
+			want:       false,
+		},
+		{
 			name:       "gemini_resource_exhausted_429_is_not_terminal",
 			account:    &Account{Platform: PlatformGemini},
 			statusCode: http.StatusTooManyRequests,

@@ -216,6 +216,14 @@ func terminalAccountPhraseText(responseBody []byte) string {
 // Google/Anthropic/Antigravity document and use 429 as a recoverable quota or
 // rate window; their billing-looking 429 text must not become a permanent ban.
 func terminalAccountKindAllowed(account *Account, statusCode int, kind terminalAccountErrorKind) bool {
+	// Refreshable OpenAI OAuth credentials use the existing 401 recovery path:
+	// invalidate the cached token and pause scheduling while refresh runs. Error
+	// messages such as "account is disabled" are not authoritative enough to
+	// bypass that policy; explicit token_invalidated/token_revoked codes remain
+	// permanently handled by RateLimitService's 401 branch.
+	if statusCode == http.StatusUnauthorized && account.IsOpenAIOAuth() {
+		return false
+	}
 	if kind != terminalAccountBillingExhausted || statusCode != http.StatusTooManyRequests {
 		return true
 	}
