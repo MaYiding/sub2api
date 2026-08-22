@@ -17,6 +17,7 @@ const SERVER_HOST = process.env.SUB2API_SYNC_HOST || '104.36.67.199'
 const SERVER_USER = process.env.SUB2API_SYNC_USER || 'root'
 const SERVER_API = 'http://127.0.0.1:8080/api/v1'
 const ACCOUNT_PAGE_SIZE = 200
+const RATE_LIMIT_PROBE_INTERVAL_MS = 60 * 1000
 const TOKEN_KEYS = ['access_token', 'refresh_token', 'id_token']
 const OPTIONAL_CREDENTIAL_KEYS = [
   'client_id',
@@ -249,6 +250,41 @@ function applyServerCredentials(id, credentials, serverAccount = null) {
   }
 }
 
+function hasServerRateLimitState(account) {
+  const modelRateLimits = account && account.extra && account.extra.model_rate_limits
+  return Boolean(
+    account && (
+      account.rate_limited_at ||
+      account.rate_limit_reset_at ||
+      (modelRateLimits && typeof modelRateLimits === 'object' && Object.keys(modelRateLimits).length > 0)
+    ),
+  )
+}
+
+function openAIQuotaIsAvailable(response) {
+  const usage = unwrap(response)
+  const rateLimit = usage && usage.rate_limit
+  if (!rateLimit || rateLimit.allowed !== true || rateLimit.limit_reached === true) return false
+  for (const additional of Array.isArray(usage.additional_rate_limits) ? usage.additional_rate_limits : []) {
+    const additionalRateLimit = additional && additional.rate_limit
+    if (additionalRateLimit && (additionalRateLimit.allowed !== true || additionalRateLimit.limit_reached === true)) {
+      return false
+    }
+  }
+  return true
+}
+
+function queryServerOpenAIQuota(id) {
+  return remoteRequest(`/admin/openai/accounts/${encodeURIComponent(id)}/quota`)
+}
+
+function clearServerRateLimit(id) {
+  const response = remoteRequest(`/admin/accounts/${encodeURIComponent(id)}/clear-rate-limit`, 'POST')
+  if (response && response.code !== undefined && response.code !== 0) {
+    fail(`server rejected rate-limit clear for account ${id}`)
+  }
+}
+
 function loadLocalAccounts() {
   const index = readJson(INDEX_PATH)
   const result = new Map()
@@ -277,13 +313,15 @@ function loadLocalAccounts() {
 }
 
 function readState() {
-  if (!fs.existsSync(STATE_PATH)) return { version: 1, accounts: {} }
+  if (!fs.existsSync(STATE_PATH)) return { version: 1, accounts: {}, rate_limit_probes: {} }
   try {
     const state = readJson(STATE_PATH)
-    return state && state.version === 1 && state.accounts ? state : { version: 1, accounts: {} }
+    if (!state || state.version !== 1 || !state.accounts) return { version: 1, accounts: {}, rate_limit_probes: {} }
+    if (!state.rate_limit_probes || typeof state.rate_limit_probes !== 'object') state.rate_limit_probes = {}
+    return state
   } catch {
     log('state file is invalid; starting a guarded re-adoption')
-    return { version: 1, accounts: {} }
+    return { version: 1, accounts: {}, rate_limit_probes: {} }
   }
 }
 
@@ -340,6 +378,35 @@ function stateFor(local, serverMeta) {
     initialized: true,
     last_sync_at: new Date().toISOString(),
   }
+}
+
+function reconcileServerRateLimits(serverMetas, localByEmail, state) {
+  let changed = false
+  for (const serverMeta of serverMetas) {
+    const email = serverMeta.name
+    if (!localByEmail.has(email) || !hasServerRateLimitState(serverMeta)) continue
+
+    const lastProbeAt = Date.parse(state.rate_limit_probes[email] || '')
+    if (Number.isFinite(lastProbeAt) && Date.now() - lastProbeAt < RATE_LIMIT_PROBE_INTERVAL_MS) continue
+    if (!dryRun) {
+      state.rate_limit_probes[email] = new Date().toISOString()
+      changed = true
+    }
+
+    try {
+      const quota = queryServerOpenAIQuota(serverMeta.id)
+      if (!openAIQuotaIsAvailable(quota)) continue
+      if (dryRun) {
+        log(`would clear server rate limit ${email}: upstream quota is available`)
+      } else {
+        clearServerRateLimit(serverMeta.id)
+        log(`cleared server rate limit ${email}: upstream quota is available`)
+      }
+    } catch (error) {
+      log(`rate-limit probe skipped ${email}: ${error instanceof Error ? error.message : 'probe failed'}`)
+    }
+  }
+  return changed
 }
 
 function main() {
@@ -464,6 +531,8 @@ function main() {
     }
   }
 
+  if (reconcileServerRateLimits(serverMetas, localByEmail, state)) changed = true
+
   if (!dryRun && changed) saveState(state)
   log(`completed: local=${localByEmail.size}, server_oauth=${serverMetas.length}, dry_run=${dryRun}`)
 }
@@ -482,6 +551,8 @@ module.exports = {
   credentialsFromLocal,
   credentialsFromServer,
   mergeServerCredentials,
+  hasServerRateLimitState,
+  openAIQuotaIsAvailable,
   sameCredentialFields,
   sameTokens,
 }

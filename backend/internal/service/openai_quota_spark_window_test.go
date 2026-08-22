@@ -27,10 +27,12 @@ import (
 // stubQuotaAccountRepo 是多账号 AccountRepository stub，仅实现 GetByID。
 type stubQuotaAccountRepo struct {
 	AccountRepository
-	accounts         map[int64]*Account
-	extraUpdates     map[int64]map[string]any
-	extraUpdateCalls int
-	extraUpdateErr   error
+	accounts          map[int64]*Account
+	extraUpdates      map[int64]map[string]any
+	extraUpdateCalls  int
+	extraUpdateErr    error
+	clearRateLimitIDs []int64
+	clearRateLimitErr error
 }
 
 func (r *stubQuotaAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -60,6 +62,11 @@ func (r *stubQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates 
 	}
 	r.extraUpdates[id] = updates
 	return nil
+}
+
+func (r *stubQuotaAccountRepo) ClearRateLimit(_ context.Context, id int64) error {
+	r.clearRateLimitIDs = append(r.clearRateLimitIDs, id)
+	return r.clearRateLimitErr
 }
 
 // stubQuotaTokenCache 实现 OpenAITokenCache，返回预设静态 token。
@@ -276,6 +283,7 @@ func TestResetCreditAgentIdentityUsesAssertionAndRecoversInvalidTaskOnce(t *test
 	require.NotEqual(t, assertions[0], assertions[1])
 	require.Equal(t, "task-reset-new", account.GetCredential("task_id"))
 	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+	require.Equal(t, []int64{account.ID}, repo.clearRateLimitIDs)
 }
 
 func TestResetCreditAgentIdentityReusesConcurrentlyRecoveredTask(t *testing.T) {
