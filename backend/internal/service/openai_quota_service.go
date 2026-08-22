@@ -395,6 +395,19 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
+	// The upstream reset credit only changes OpenAI's quota window. Clear the
+	// local scheduler state as part of the same successful action so the
+	// account is not left in a stale cooldown until the old reset timestamp.
+	// This is best-effort: the upstream credit has already been consumed, so a
+	// local persistence failure must not make callers retry and consume another
+	// credit. A later quota probe or successful request can repair the state.
+	if s.accountRepo != nil {
+		if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
+			slog.Warn("openai_quota_reset_clear_runtime_state_failed", "account_id", accountID, "error", err)
+		} else {
+			slog.Info("openai_quota_reset_runtime_state_cleared", "account_id", accountID)
+		}
+	}
 	return &payload, nil
 }
 

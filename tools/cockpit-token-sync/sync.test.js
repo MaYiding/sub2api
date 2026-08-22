@@ -3,7 +3,9 @@ const test = require('node:test')
 
 const {
   credentialsFromLocal,
+  hasServerRateLimitState,
   mergeServerCredentials,
+  openAIQuotaIsAvailable,
   sameCredentialFields,
 } = require('./sync.js')
 
@@ -63,4 +65,17 @@ test('preserves server-only OAuth fields while applying local credentials', () =
   assert.equal(merged._token_version, 123)
   assert.equal(merged.access_token, credentials.access_token)
   assert.equal(merged.expires_at, credentials.expires_at)
+})
+
+test('recognizes available upstream quota and server runtime limit state', () => {
+  assert.equal(openAIQuotaIsAvailable({ rate_limit: { allowed: true, limit_reached: false } }), true)
+  assert.equal(openAIQuotaIsAvailable({ rate_limit: { allowed: false, limit_reached: true } }), false)
+  assert.equal(openAIQuotaIsAvailable({ rate_limit: { allowed: true, limit_reached: false }, additional_rate_limits: [
+    { rate_limit: { allowed: false, limit_reached: true } },
+  ] }), false)
+  assert.equal(openAIQuotaIsAvailable({}), false)
+
+  assert.equal(hasServerRateLimitState({ rate_limit_reset_at: '2026-08-26T00:00:00Z' }), true)
+  assert.equal(hasServerRateLimitState({ extra: { model_rate_limits: { 'gpt-5': {} } } }), true)
+  assert.equal(hasServerRateLimitState({}), false)
 })
