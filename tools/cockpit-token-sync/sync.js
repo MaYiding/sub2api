@@ -182,6 +182,13 @@ function credentialMetadataSnapshot(credentials) {
   return Object.fromEntries(Object.entries(credentials).filter(([key]) => !TOKEN_KEYS.includes(key)))
 }
 
+function sameCredentialMetadata(left, right) {
+  const leftSnapshot = credentialMetadataSnapshot(left)
+  const rightSnapshot = credentialMetadataSnapshot(right)
+  return sameCredentialFields(leftSnapshot, rightSnapshot, false) &&
+    sameCredentialFields(rightSnapshot, leftSnapshot, false)
+}
+
 function mergeServerCredentials(serverAccount, localCredentials, tokenVersion = Date.now()) {
   return {
     ...((serverAccount && serverAccount.credentials) || {}),
@@ -450,6 +457,7 @@ function stateFor(local, serverMeta, serverAccount) {
     server_updated_at: serverMeta.updated_at || '',
     server_token_version: serverCredentialVersion(serverAccount),
     server_token_issued_at: credentialIssuedAt(credentialsFromServer(serverAccount)),
+    server_credential_metadata: credentialMetadataSnapshot(serverMeta.credentials),
     local_token_updated_at: Number(local.value.token_updated_at) || 0,
     local_credential_metadata: credentialMetadataSnapshot(local.credentials),
     initialized: true,
@@ -555,13 +563,16 @@ function main() {
     }
 
     const localChanged = Number(local.value.token_updated_at) !== Number(previous.local_token_updated_at)
-    const serverRecordChanged = (serverMeta.updated_at || '') !== (previous.server_updated_at || '')
+    const serverCredentialMetadataChanged = !sameCredentialMetadata(
+      serverMeta.credentials,
+      previous.server_credential_metadata,
+    )
     const localMetadataChanged = !sameCredentialFields(
       local.credentials,
       previous.local_credential_metadata || {},
       false,
     )
-    if (!localChanged && !serverRecordChanged && !localMetadataChanged) continue
+    if (!localChanged && !serverCredentialMetadataChanged && !localMetadataChanged) continue
 
     const serverAccount = getExport([serverMeta.id]).find(account => account.name === email)
     const serverCredentials = credentialsFromServer(serverAccount)
@@ -662,6 +673,7 @@ module.exports = {
   openAIQuotaIsAvailable,
   remoteRequest,
   sameCredentialFields,
+  sameCredentialMetadata,
   sameTokens,
   serverCredentialVersion,
   serverCredentialsChanged,

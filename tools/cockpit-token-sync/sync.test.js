@@ -11,6 +11,7 @@ const {
   openAIQuotaIsAvailable,
   remoteRequest,
   sameCredentialFields,
+  sameCredentialMetadata,
   serverCredentialsChanged,
   syncCredentialDirection,
 } = require('./sync.js')
@@ -66,6 +67,20 @@ test('stores credential metadata without token material', () => {
   assert.equal(snapshot.access_token, undefined)
   assert.equal(snapshot.refresh_token, undefined)
   assert.equal(snapshot.id_token, undefined)
+})
+
+test('compares server credential metadata symmetrically and ignores timestamp formatting', () => {
+  const metadata = {
+    email: 'account@example.com',
+    expires_at: '2027-01-15T08:00:00.000Z',
+  }
+
+  assert.equal(sameCredentialMetadata(metadata, {
+    email: 'account@example.com',
+    expires_at: '2027-01-15T16:00:00+08:00',
+  }), true)
+  assert.equal(sameCredentialMetadata(metadata, { email: 'account@example.com' }), false)
+  assert.equal(sameCredentialMetadata({ email: 'account@example.com' }, metadata), false)
 })
 
 test('preserves server-only OAuth fields while applying local credentials', () => {
