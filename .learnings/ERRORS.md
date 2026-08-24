@@ -25,13 +25,13 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 5
+- Recurrence-Count: 6
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 sync push and follow-up fetch used a command-scoped `url.insteadOf` rewrite without changing the persistent remote.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 sync push and follow-up fetch used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
 
 ---
 
@@ -307,5 +307,171 @@ Select the listener whose command matches the managed application, ignore unrela
 - **Resolved**: 2026-08-24T05:34:40Z
 - **Commit/PR**: pending restart-fix PR
 - **Notes**: Added command-aware listener selection, a `SO_REUSEADDR` IPv4 bind probe matching the Go server's behavior, and post-KILL verification while leaving Docker untouched.
+
+---
+
+## [ERR-20260824-004] local-dev-database-env-bootstrap
+
+**Logged**: 2026-08-24T13:48:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Sourcing `deploy/.env` alone does not define the runtime `DATABASE_*` variables used by the local development backend.
+
+### Error
+```
+psql: error: connection to server on socket "/tmp/.s.PGSQL.5432" failed: FATAL:  database "mayiding" does not exist
+```
+
+### Context
+- A read-only diagnostic command sourced `deploy/.env` and expected `DATABASE_HOST`, `DATABASE_USER`, and `DATABASE_DBNAME` to be present.
+- `tools/sub2api-dev.sh load_env` derives those values from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`; sourcing the file without applying that mapping leaves the database variables unset.
+
+### Suggested Fix
+For ad hoc local database diagnostics, source `deploy/.env` and reproduce the non-secret `load_env` mapping, or query the running process environment without printing credentials.
+
+### Metadata
+- Reproducible: yes
+- Related Files: deploy/.env, tools/sub2api-dev.sh
+
+### Resolution
+- **Resolved**: 2026-08-24T13:48:00+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Subsequent commands use `POSTGRES_*` directly with explicit host and port.
+
+---
+
+## [ERR-20260824-005] zsh-unmatched-source-glob
+
+**Logged**: 2026-08-24T13:52:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+An unquoted optional source-file glob aborted a zsh diagnostic subcommand before `rg` could run.
+
+### Error
+```
+zsh:1: no matches found: backend/internal/service/openai_upstream_error*.go
+```
+
+### Context
+- A read-only search listed several concrete files plus an optional wildcard.
+- zsh expands unmatched globs as an error by default.
+
+### Suggested Fix
+Use `rg` directory filters, quote the pattern, or resolve optional files with `rg --files` before passing them to another command.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-24T13:52:00+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Continued with directory-scoped `rg` queries that do not depend on optional shell glob expansion.
+
+---
+
+## [ERR-20260824-006] zsh-reserved-diagnostic-variables
+
+**Logged**: 2026-08-24T13:57:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Using `path` and `status` as temporary zsh variable names broke command lookup and assignment in a diagnostic loop.
+
+### Error
+```
+zsh:6: command not found: curl
+zsh:7: read-only variable: status
+```
+
+### Context
+- In zsh, `path` is tied to `PATH`, so assigning a request path to it removed normal executable directories.
+- `status` is a read-only special parameter containing the previous exit status.
+
+### Suggested Fix
+Use task-specific names such as `endpoint_path` and `http_code`, especially in zsh scripts.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-24T13:57:00+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Reserved names were replaced with task-specific variables.
+
+---
+
+## [ERR-20260824-007] database-schema-assumption
+
+**Logged**: 2026-08-24T13:57:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+A read-only account-state query assumed columns that are not present in the current Ent schema.
+
+### Error
+```
+ERROR:  column "disabled_at" does not exist
+```
+
+### Context
+- The query attempted to inspect account scheduling state using guessed column names.
+- The project schema has evolved and must be introspected before ad hoc SQL diagnostics.
+
+### Suggested Fix
+Query `information_schema.columns` or use `\d accounts` before selecting non-core diagnostic fields.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/ent/schema/account.go
+
+### Resolution
+- **Resolved**: 2026-08-24T13:57:00+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Subsequent database queries use schema-discovered column names.
+
+---
+
+## [ERR-20260824-008] duplicated-workdir-prefix
+
+**Logged**: 2026-08-24T14:07:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A diagnostic command used repository-root file paths while its working directory was already `backend/`.
+
+### Error
+```
+sed: backend/internal/service/openai_responses_lite_tools.go: No such file or directory
+```
+
+### Context
+- The command set `workdir` to the backend directory for `go test`.
+- Adjacent source-inspection arguments still included the `backend/` prefix, so the first `sed` failed and prevented the chained test listing.
+
+### Suggested Fix
+Run mixed repository inspection from the repository root, or split backend test commands from root-relative source inspection.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/internal/service/openai_responses_lite_tools.go
+
+### Resolution
+- **Resolved**: 2026-08-24T14:07:00+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Re-ran source inspection from the repository root and the Go test from `backend/` separately.
 
 ---
