@@ -27,12 +27,15 @@ import (
 // stubQuotaAccountRepo 是多账号 AccountRepository stub，仅实现 GetByID。
 type stubQuotaAccountRepo struct {
 	AccountRepository
-	accounts          map[int64]*Account
-	extraUpdates      map[int64]map[string]any
-	extraUpdateCalls  int
-	extraUpdateErr    error
-	clearRateLimitIDs []int64
-	clearRateLimitErr error
+	accounts                  map[int64]*Account
+	extraUpdates              map[int64]map[string]any
+	extraUpdateCalls          int
+	extraUpdateErr            error
+	clearRateLimitIDs         []int64
+	clearRateLimitErr         error
+	clearTempUnschedulableIDs []int64
+	clearTempUnschedulableErr error
+	clearModelRateLimitIDs    []int64
 }
 
 func (r *stubQuotaAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -67,6 +70,43 @@ func (r *stubQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates 
 func (r *stubQuotaAccountRepo) ClearRateLimit(_ context.Context, id int64) error {
 	r.clearRateLimitIDs = append(r.clearRateLimitIDs, id)
 	return r.clearRateLimitErr
+}
+
+func (r *stubQuotaAccountRepo) ClearTempUnschedulable(_ context.Context, id int64) error {
+	r.clearTempUnschedulableIDs = append(r.clearTempUnschedulableIDs, id)
+	return r.clearTempUnschedulableErr
+}
+
+func (r *stubQuotaAccountRepo) ClearModelRateLimits(_ context.Context, id int64) error {
+	r.clearModelRateLimitIDs = append(r.clearModelRateLimitIDs, id)
+	return nil
+}
+
+type quotaRuntimeBlockRecorder struct {
+	clearedIDs []int64
+}
+
+func (r *quotaRuntimeBlockRecorder) BlockAccountScheduling(_ *Account, _ time.Time, _ string) {}
+
+func (r *quotaRuntimeBlockRecorder) ClearAccountSchedulingBlock(accountID int64) {
+	r.clearedIDs = append(r.clearedIDs, accountID)
+}
+
+type quotaTempUnschedCacheRecorder struct {
+	deletedIDs []int64
+}
+
+func (r *quotaTempUnschedCacheRecorder) SetTempUnsched(_ context.Context, _ int64, _ *TempUnschedState) error {
+	return nil
+}
+
+func (r *quotaTempUnschedCacheRecorder) GetTempUnsched(_ context.Context, _ int64) (*TempUnschedState, error) {
+	return nil, nil
+}
+
+func (r *quotaTempUnschedCacheRecorder) DeleteTempUnsched(_ context.Context, accountID int64) error {
+	r.deletedIDs = append(r.deletedIDs, accountID)
+	return nil
 }
 
 // stubQuotaTokenCache 实现 OpenAITokenCache，返回预设静态 token。
@@ -284,6 +324,8 @@ func TestResetCreditAgentIdentityUsesAssertionAndRecoversInvalidTaskOnce(t *test
 	require.Equal(t, "task-reset-new", account.GetCredential("task_id"))
 	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
 	require.Equal(t, []int64{account.ID}, repo.clearRateLimitIDs)
+	require.Equal(t, []int64{account.ID}, repo.clearTempUnschedulableIDs)
+	require.Empty(t, repo.clearModelRateLimitIDs)
 }
 
 func TestResetCreditAgentIdentityReusesConcurrentlyRecoveredTask(t *testing.T) {
@@ -429,6 +471,74 @@ func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 	require.True(t, strings.HasPrefix(authorization, "AgentAssertion "))
 	require.Equal(t, "account-quota", accountHeader)
 	require.Equal(t, "true", fedrampHeader)
+}
+
+func TestQueryUsageAvailableClearsOnlyAccountWideRuntimeState(t *testing.T) {
+	now := time.Now().UTC()
+	rateLimitedAt := now.Add(-time.Minute)
+	rateLimitResetAt := now.Add(time.Hour)
+	overloadUntil := now.Add(time.Minute)
+	tempUnschedulableUntil := now.Add(time.Minute)
+	account := &Account{
+		ID:                      310,
+		Platform:                PlatformOpenAI,
+		Type:                    AccountTypeOAuth,
+		Status:                  StatusActive,
+		RateLimitedAt:           &rateLimitedAt,
+		RateLimitResetAt:        &rateLimitResetAt,
+		OverloadUntil:           &overloadUntil,
+		TempUnschedulableUntil:  &tempUnschedulableUntil,
+		TempUnschedulableReason: "stale runtime state",
+		Credentials: map[string]any{
+			"chatgpt_account_id": "account-quota-reconcile",
+		},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "fake-access-token",
+	}}
+	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = w.Write([]byte(`{"plan_type":"pro","rate_limit":{"allowed":true,"limit_reached":false}}`))
+		case "/backend-api/wham/rate-limit-reset-credits":
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	blocker := &quotaRuntimeBlockRecorder{}
+	tempCache := &quotaTempUnschedCacheRecorder{}
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc.runtimeBlocker = blocker
+	svc.tempUnschedCache = tempCache
+	usage, err := svc.QueryUsage(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.True(t, openAIQuotaIsFullyAvailable(usage))
+	require.Equal(t, []int64{account.ID}, repo.clearRateLimitIDs)
+	require.Equal(t, []int64{account.ID}, repo.clearTempUnschedulableIDs)
+	require.Empty(t, repo.clearModelRateLimitIDs, "quota recovery must preserve model-specific restrictions")
+	require.Equal(t, []int64{account.ID}, tempCache.deletedIDs)
+	require.Equal(t, []int64{account.ID}, blocker.clearedIDs)
+}
+
+func TestOpenAIQuotaAvailabilityRequiresEveryReportedWindow(t *testing.T) {
+	require.False(t, openAIQuotaIsFullyAvailable(nil))
+	require.False(t, openAIQuotaIsFullyAvailable(&OpenAIQuotaUsage{}))
+	require.True(t, openAIQuotaIsFullyAvailable(&OpenAIQuotaUsage{
+		RateLimit: &OpenAIRateLimit{Allowed: true},
+	}))
+	require.False(t, openAIQuotaIsFullyAvailable(&OpenAIQuotaUsage{
+		RateLimit: &OpenAIRateLimit{Allowed: true},
+		AdditionalRateLimits: []OpenAIAdditionalRateLimit{
+			{MeteredFeature: "codex_bengalfox", RateLimit: &OpenAIRateLimit{Allowed: false, LimitReached: true}},
+		},
+	}))
 }
 
 func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {

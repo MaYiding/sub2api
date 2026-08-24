@@ -192,8 +192,11 @@ func ProvideOpenAIQuotaService(
 	privacyClientFactory PrivacyClientFactory,
 	referralClient OpenAIReferralClient,
 	openAIGatewayService *OpenAIGatewayService,
+	tempUnschedCache TempUnschedCache,
 ) *OpenAIQuotaService {
 	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory, referralClient)
+	service.tempUnschedCache = tempUnschedCache
+	service.runtimeBlocker = openAIGatewayService
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }

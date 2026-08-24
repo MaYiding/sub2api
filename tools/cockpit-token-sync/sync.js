@@ -18,6 +18,10 @@ const SERVER_USER = process.env.SUB2API_SYNC_USER || 'root'
 const SERVER_API = 'http://127.0.0.1:8080/api/v1'
 const ACCOUNT_PAGE_SIZE = 200
 const RATE_LIMIT_PROBE_INTERVAL_MS = 60 * 1000
+const REMOTE_REQUEST_TIMEOUT_MS = positiveIntegerEnv('SUB2API_SYNC_REQUEST_TIMEOUT_MS', 40 * 1000)
+const REMOTE_CURL_TIMEOUT_SECONDS = positiveIntegerEnv('SUB2API_SYNC_CURL_TIMEOUT_SECONDS', 15)
+const SYNC_PASS_TIMEOUT_MS = positiveIntegerEnv('SUB2API_SYNC_PASS_TIMEOUT_MS', 90 * 1000)
+const SYNC_PASS_STARTED_AT = Date.now()
 const TOKEN_KEYS = ['access_token', 'refresh_token', 'id_token']
 const OPTIONAL_CREDENTIAL_KEYS = [
   'client_id',
@@ -27,6 +31,11 @@ const OPTIONAL_CREDENTIAL_KEYS = [
 const TIMESTAMP_CREDENTIAL_KEYS = ['expires_at', 'subscription_expires_at']
 
 const dryRun = process.argv.includes('--dry-run')
+
+function positiveIntegerEnv(name, fallback) {
+  const parsed = Number(process.env[name])
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
 
 function log(message) {
   process.stdout.write(`[${new Date().toISOString()}] ${message}\n`)
@@ -67,6 +76,12 @@ function accessTokenExpiresAt(token) {
   const exp = Number(payload && payload.exp)
   if (!Number.isFinite(exp) || exp <= 0) return null
   return new Date(Math.floor(exp) * 1000).toISOString()
+}
+
+function accessTokenIssuedAt(token) {
+  const payload = decodeJwtPayload(token)
+  const iat = Number(payload && payload.iat)
+  return Number.isFinite(iat) && iat > 0 ? Math.floor(iat) : null
 }
 
 function decryptAccount(filePath) {
@@ -162,10 +177,11 @@ function sameCredentialFields(expected, actual, includeTokens = true) {
     .every(([key, value]) => comparableCredentialValue(key, value) === comparableCredentialValue(key, actual[key]))
 }
 
-function mergeServerCredentials(serverAccount, localCredentials) {
+function mergeServerCredentials(serverAccount, localCredentials, tokenVersion = Date.now()) {
   return {
     ...((serverAccount && serverAccount.credentials) || {}),
     ...localCredentials,
+    _token_version: tokenVersion,
   }
 }
 
@@ -173,36 +189,90 @@ function hasStaleReauthState(local) {
   return local.value.requires_reauth === true || Boolean(local.value.reauth_reason)
 }
 
-function serverTokenTimestamp(updatedAt) {
-  const time = Date.parse(updatedAt || '')
-  return Number.isFinite(time) ? Math.floor(time / 1000) : Math.floor(Date.now() / 1000)
+function serverCredentialVersion(serverAccount) {
+  const value = Number(serverAccount && serverAccount.credentials && serverAccount.credentials._token_version)
+  return Number.isFinite(value) && value > 0 ? value : null
 }
 
-function remoteRequest(apiPath, method = 'GET', input = '') {
+function credentialIssuedAt(credentials) {
+  return accessTokenIssuedAt(credentials && credentials.access_token)
+}
+
+function credentialDirection(local, serverAccount) {
+  const localIssuedAt = credentialIssuedAt(local && local.credentials)
+  const serverCredentials = credentialsFromServer(serverAccount)
+  const serverIssuedAt = credentialIssuedAt(serverCredentials)
+  if (localIssuedAt !== null && serverIssuedAt !== null && localIssuedAt !== serverIssuedAt) {
+    return localIssuedAt > serverIssuedAt ? 'push' : 'pull'
+  }
+  return 'conflict'
+}
+
+function serverCredentialsChanged(previous, serverAccount) {
+  const currentVersion = serverCredentialVersion(serverAccount)
+  const previousVersion = Number(previous && previous.server_token_version)
+  if (currentVersion !== null && Number.isFinite(previousVersion) && previousVersion > 0) {
+    return currentVersion !== previousVersion
+  }
+
+  const currentIssuedAt = credentialIssuedAt(credentialsFromServer(serverAccount))
+  const previousIssuedAt = Number(previous && previous.server_token_issued_at)
+  if (currentIssuedAt !== null && Number.isFinite(previousIssuedAt) && previousIssuedAt > 0) {
+    return currentIssuedAt !== previousIssuedAt
+  }
+  return false
+}
+
+function syncCredentialDirection(localChanged, serverChanged, previous, local, serverAccount) {
+  const hasVersionBaseline = Number(previous && previous.server_token_version) > 0
+  const hasIssuedAtBaseline = Number(previous && previous.server_token_issued_at) > 0
+  if (!hasVersionBaseline && !hasIssuedAtBaseline) {
+    return credentialDirection(local, serverAccount)
+  }
+  if (localChanged && !serverChanged) return 'push'
+  if (serverChanged && !localChanged) return 'pull'
+  return credentialDirection(local, serverAccount)
+}
+
+function serverTokenTimestamp(serverAccount) {
+  const issuedAt = credentialIssuedAt(credentialsFromServer(serverAccount))
+  if (issuedAt !== null) return issuedAt
+  const version = serverCredentialVersion(serverAccount)
+  return version !== null ? Math.floor(version / 1000) : Math.floor(Date.now() / 1000)
+}
+
+function remoteRequest(apiPath, method = 'GET', input = '', run = spawnSync) {
+  const passRemainingMs = SYNC_PASS_TIMEOUT_MS - (Date.now() - SYNC_PASS_STARTED_AT)
+  if (passRemainingMs <= 0) fail(`sync pass timed out after ${SYNC_PASS_TIMEOUT_MS}ms`)
+  const requestTimeoutMs = Math.min(REMOTE_REQUEST_TIMEOUT_MS, passRemainingMs)
   const url = `${SERVER_API}${apiPath}`
+  const curlTimeoutArgs = `--connect-timeout 5 --max-time ${REMOTE_CURL_TIMEOUT_SECONDS}`
   const remoteScript = [
     'set -eu',
     'envs="$(docker inspect sub2api --format "{{range .Config.Env}}{{println .}}{{end}}")"',
     'email="$(printf "%s\\n" "$envs" | sed -n "s/^ADMIN_EMAIL=//p")"',
     'password="$(printf "%s\\n" "$envs" | sed -n "s/^ADMIN_PASSWORD=//p")"',
     'body="$(printf "{\\"email\\":\\"%s\\",\\"password\\":\\"%s\\"}" "$email" "$password")"',
-    'login="$(curl -fsS -H "Content-Type: application/json" --data "$body" http://127.0.0.1:8080/api/v1/auth/login)"',
+    `login="$(curl -fsS ${curlTimeoutArgs} -H "Content-Type: application/json" --data "$body" http://127.0.0.1:8080/api/v1/auth/login)"`,
     'jwt="$(printf "%s" "$login" | sed -n "s/.*\\"access_token\\":\\"\\([^\\"]*\\)\\".*/\\1/p")"',
     'test -n "$jwt"',
     `payload="$(cat)"`,
     `if [ ${shellQuote(method)} = POST ]; then`,
-    `  response="$(curl -sS -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" ${shellQuote(url)})"`,
+    `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" ${shellQuote(url)})"`,
     'else',
-    `  response="$(curl -sS -H "Authorization: Bearer $jwt" ${shellQuote(url)})"`,
+    `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" ${shellQuote(url)})"`,
     'fi',
     'printf "%s" "$response"',
   ].join('\n')
 
-  const result = spawnSync('/usr/bin/ssh', [
+  const result = run('/usr/bin/ssh', [
     '-i', SSH_KEY,
     '-o', 'BatchMode=yes',
     '-o', 'ConnectTimeout=10',
     '-o', 'ConnectionAttempts=1',
+    '-o', 'ServerAliveInterval=5',
+    '-o', 'ServerAliveCountMax=3',
+    '-o', 'NumberOfPasswordPrompts=0',
     '-o', 'StrictHostKeyChecking=yes',
     `${SERVER_USER}@${SERVER_HOST}`,
     remoteScript,
@@ -210,8 +280,13 @@ function remoteRequest(apiPath, method = 'GET', input = '') {
     input,
     encoding: 'utf8',
     maxBuffer: 30 * 1024 * 1024,
+    timeout: requestTimeoutMs,
+    killSignal: 'SIGKILL',
   })
 
+  if (result.error && result.error.code === 'ETIMEDOUT') {
+    fail(`remote ${method} ${apiPath} timed out after ${requestTimeoutMs}ms`)
+  }
   if (result.error || result.status !== 0) fail(`remote ${method} ${apiPath} failed`)
   try {
     return JSON.parse(result.stdout)
@@ -240,23 +315,25 @@ function exportServerAccounts(ids = []) {
 }
 
 function applyServerCredentials(id, credentials, serverAccount = null) {
+  const mergedCredentials = mergeServerCredentials(serverAccount, credentials)
   const response = remoteRequest(
     `/admin/accounts/${encodeURIComponent(id)}/apply-oauth-credentials`,
     'POST',
-    JSON.stringify({ type: 'oauth', credentials: mergeServerCredentials(serverAccount, credentials) }),
+    JSON.stringify({ type: 'oauth', credentials: mergedCredentials }),
   )
   if (response && response.code !== undefined && response.code !== 0) {
     fail(`server rejected OAuth credentials for account ${id}`)
   }
+  return { ...(serverAccount || {}), credentials: mergedCredentials }
 }
 
 function hasServerRateLimitState(account) {
-  const modelRateLimits = account && account.extra && account.extra.model_rate_limits
   return Boolean(
     account && (
       account.rate_limited_at ||
       account.rate_limit_reset_at ||
-      (modelRateLimits && typeof modelRateLimits === 'object' && Object.keys(modelRateLimits).length > 0)
+      account.overload_until ||
+      account.temp_unschedulable_until
     ),
   )
 }
@@ -276,13 +353,6 @@ function openAIQuotaIsAvailable(response) {
 
 function queryServerOpenAIQuota(id) {
   return remoteRequest(`/admin/openai/accounts/${encodeURIComponent(id)}/quota`)
-}
-
-function clearServerRateLimit(id) {
-  const response = remoteRequest(`/admin/accounts/${encodeURIComponent(id)}/clear-rate-limit`, 'POST')
-  if (response && response.code !== undefined && response.code !== 0) {
-    fail(`server rejected rate-limit clear for account ${id}`)
-  }
 }
 
 function loadLocalAccounts() {
@@ -345,7 +415,7 @@ function writeLocalFromServer(local, serverAccount, serverMeta) {
     plan_type: serverCredentials.plan_type || local.value.plan_type,
     subscription_active_until: serverCredentials.subscription_expires_at || local.value.subscription_active_until,
     token_generation: (Number(local.value.token_generation) || 0) + 1,
-    token_updated_at: serverTokenTimestamp(serverMeta.updated_at),
+    token_updated_at: serverTokenTimestamp(serverAccount),
     token_source_mode: 'managed',
     requires_reauth: false,
     reauth_reason: '',
@@ -369,12 +439,13 @@ function writeLocalFromServer(local, serverAccount, serverMeta) {
   fs.renameSync(writeTemp, local.filePath)
 }
 
-function stateFor(local, serverMeta) {
+function stateFor(local, serverMeta, serverAccount) {
   return {
     server_id: serverMeta.id,
     server_updated_at: serverMeta.updated_at || '',
+    server_token_version: serverCredentialVersion(serverAccount),
+    server_token_issued_at: credentialIssuedAt(credentialsFromServer(serverAccount)),
     local_token_updated_at: Number(local.value.token_updated_at) || 0,
-    local_file_mtime_ms: fs.statSync(local.filePath).mtimeMs,
     initialized: true,
     last_sync_at: new Date().toISOString(),
   }
@@ -397,10 +468,9 @@ function reconcileServerRateLimits(serverMetas, localByEmail, state) {
       const quota = queryServerOpenAIQuota(serverMeta.id)
       if (!openAIQuotaIsAvailable(quota)) continue
       if (dryRun) {
-        log(`would clear server rate limit ${email}: upstream quota is available`)
+        log(`would reconcile server quota state ${email}: upstream quota is available`)
       } else {
-        clearServerRateLimit(serverMeta.id)
-        log(`cleared server rate limit ${email}: upstream quota is available`)
+        log(`reconciled server quota state ${email}: upstream quota is available`)
       }
     } catch (error) {
       log(`rate-limit probe skipped ${email}: ${error instanceof Error ? error.message : 'probe failed'}`)
@@ -440,27 +510,52 @@ function main() {
       }
       if (sameTokens(local.credentials, serverTokens)) {
         if (!dryRun) {
-          state.accounts[email] = stateFor(local, serverMeta)
+          let adoptedServerAccount = serverAccount
+          if (!sameCredentialFields(local.credentials, serverTokens)) {
+            adoptedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+            log(`pushed ${email}: completed server OAuth metadata`)
+          }
+          state.accounts[email] = stateFor(local, serverMeta, adoptedServerAccount)
           changed = true
         }
         log(`${dryRun ? 'would initialize' : 'initialized'} ${email}`)
       } else {
-        log(`CONFLICT ${email}: local and server tokens differ; no overwrite on first adoption`)
+        const direction = credentialDirection(local, serverAccount)
+        if (direction === 'push') {
+          if (dryRun) {
+            log(`would adopt ${email}: newer Cockpit token -> server`)
+          } else {
+            const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+            const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
+            state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
+            changed = true
+            log(`adopted ${email}: newer Cockpit token -> server`)
+          }
+        } else if (direction === 'pull') {
+          if (dryRun) {
+            log(`would adopt ${email}: newer server token -> Cockpit`)
+          } else {
+            writeLocalFromServer(local, serverAccount, serverMeta)
+            const updatedLocal = loadLocalAccounts().get(email)
+            state.accounts[email] = stateFor(updatedLocal, serverMeta, serverAccount)
+            changed = true
+            log(`adopted ${email}: newer server token -> Cockpit`)
+          }
+        } else {
+          log(`CONFLICT ${email}: local and server tokens differ with equal or unknown age; no overwrite`)
+        }
       }
       continue
     }
 
-    const localChanged = (
-      Number(local.value.token_updated_at) !== Number(previous.local_token_updated_at) ||
-      local.fileMtimeMs > Number(previous.local_file_mtime_ms || 0) + 1
-    )
-    const serverChanged = (serverMeta.updated_at || '') !== (previous.server_updated_at || '')
+    const localChanged = Number(local.value.token_updated_at) !== Number(previous.local_token_updated_at)
+    const serverRecordChanged = (serverMeta.updated_at || '') !== (previous.server_updated_at || '')
     const serverMetadataChanged = !sameCredentialFields(
       local.credentials,
       serverMeta.credentials || {},
       false,
     )
-    if (!localChanged && !serverChanged && !serverMetadataChanged) continue
+    if (!localChanged && !serverRecordChanged && !serverMetadataChanged) continue
 
     const serverAccount = getExport([serverMeta.id]).find(account => account.name === email)
     const serverCredentials = credentialsFromServer(serverAccount)
@@ -468,14 +563,15 @@ function main() {
       log(`blocked ${email}: server OAuth credentials are incomplete`)
       continue
     }
+    const serverChanged = serverCredentialsChanged(previous, serverAccount)
 
     if (sameTokens(local.credentials, serverCredentials) && !sameCredentialFields(local.credentials, serverCredentials)) {
       if (dryRun) {
         log(`would push ${email}: Cockpit credentials -> server`)
       } else {
-        applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
         const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
-        state.accounts[email] = stateFor(local, refreshedMeta)
+        state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
         changed = true
         log(`pushed ${email}: Cockpit credentials -> server`)
       }
@@ -487,10 +583,10 @@ function main() {
         if (hasStaleReauthState(local)) {
           writeLocalFromServer(local, serverAccount, serverMeta)
           const updatedLocal = loadLocalAccounts().get(email)
-          state.accounts[email] = stateFor(updatedLocal, serverMeta)
+          state.accounts[email] = stateFor(updatedLocal, serverMeta, serverAccount)
           log(`cleared stale reauth state ${email}`)
         } else {
-          state.accounts[email] = stateFor(local, serverMeta)
+          state.accounts[email] = stateFor(local, serverMeta, serverAccount)
         }
         changed = true
       } else if (hasStaleReauthState(local)) {
@@ -500,31 +596,33 @@ function main() {
       continue
     }
 
-    if (localChanged && serverChanged) {
-      log(`CONFLICT ${email}: both sides changed since last sync; no overwrite`)
+    const direction = syncCredentialDirection(localChanged, serverChanged, previous, local, serverAccount)
+
+    if (direction === 'conflict') {
+      log(`CONFLICT ${email}: tokens differ with equal or unknown age; no overwrite`)
       continue
     }
 
-    if (serverChanged) {
+    if (direction === 'pull') {
       if (dryRun) {
         log(`would pull ${email}: server -> Cockpit`)
       } else {
         writeLocalFromServer(local, serverAccount, serverMeta)
         const updatedLocal = loadLocalAccounts().get(email)
-        state.accounts[email] = stateFor(updatedLocal, serverMeta)
+        state.accounts[email] = stateFor(updatedLocal, serverMeta, serverAccount)
         changed = true
         log(`pulled ${email}: server -> Cockpit`)
       }
       continue
     }
 
-    if (localChanged) {
+    if (direction === 'push') {
       if (dryRun) {
         log(`would push ${email}: Cockpit -> server`)
       } else {
-        applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
         const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
-        state.accounts[email] = stateFor(local, refreshedMeta)
+        state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
         changed = true
         log(`pushed ${email}: Cockpit -> server`)
       }
@@ -547,12 +645,18 @@ if (require.main === module) {
 }
 
 module.exports = {
+  accessTokenIssuedAt,
   accessTokenExpiresAt,
+  credentialDirection,
   credentialsFromLocal,
   credentialsFromServer,
   mergeServerCredentials,
   hasServerRateLimitState,
   openAIQuotaIsAvailable,
+  remoteRequest,
   sameCredentialFields,
   sameTokens,
+  serverCredentialVersion,
+  serverCredentialsChanged,
+  syncCredentialDirection,
 }
