@@ -103,6 +103,25 @@ wait_for_http() {
   die "$description 在 90 秒内未就绪"
 }
 
+wait_for_managed_http() {
+  local url="$1"
+  local description="$2"
+  local port="$3"
+  local expected_command="$4"
+  local listener
+
+  local _attempt
+  for _attempt in $(seq 1 90); do
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if [[ -n "$listener" ]] && curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  die "$description 在 90 秒内未就绪"
+}
+
 start_infrastructure() {
   require_command brew
   require_command pg_isready
@@ -163,10 +182,30 @@ ensure_port_available() {
   local name="$2"
 
   local listener
-  # The managed apps bind IPv4 explicitly. Ignore unrelated IPv6-only
-  # listeners (for example Docker on ::1) that can share the same port.
-  listener="$(lsof -ti4TCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  listener="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
   [[ -z "$listener" ]] || die "$name 端口 $port 已被 PID $listener 占用；请先停止旧进程"
+}
+
+ensure_ipv4_bind_available() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+
+  require_command python3
+  python3 - "$host" "$port" <<'PY' ||
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+finally:
+    sock.close()
+PY
+    die "$name 地址 $host:$port 无法绑定；请先停止冲突进程"
 }
 
 screen_session_identifier() {
@@ -203,7 +242,7 @@ start_backend() {
   require_command go
   require_command curl
   require_command lsof
-  ensure_port_available "$SERVER_PORT" "后端"
+  ensure_ipv4_bind_available "$SERVER_HOST" "$SERVER_PORT" "后端"
 
   log "编译 Go 后端"
   (
@@ -214,7 +253,7 @@ start_backend() {
   log "通过 screen 启动 Go 后端"
   start_screen_job "$BACKEND_SESSION" "run-backend"
 
-  if ! wait_for_http "$BACKEND_URL/health" "Go 后端"; then
+  if ! wait_for_managed_http "$BACKEND_URL/health" "Go 后端" "$SERVER_PORT" "$BACKEND_BIN"; then
     tail -n 100 "$BACKEND_LOG" >&2 || true
     return 1
   fi

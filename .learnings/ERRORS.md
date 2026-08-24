@@ -300,11 +300,12 @@ Select the listener whose command matches the managed application, ignore unrela
 
 ### Metadata
 - Reproducible: yes
+- Recurrence-Count: 2
 - Related Files: tools/sub2api-dev.sh
 
 ### Resolution
 - **Resolved**: 2026-08-24T05:34:40Z
 - **Commit/PR**: pending restart-fix PR
-- **Notes**: Added command-aware listener selection and post-KILL verification while leaving Docker untouched.
+- **Notes**: Added command-aware listener selection, a `SO_REUSEADDR` IPv4 bind probe matching the Go server's behavior, and post-KILL verification while leaving Docker untouched.
 
 ---
