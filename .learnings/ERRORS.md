@@ -25,13 +25,13 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 4
+- Recurrence-Count: 5
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
-- **Commit/PR**: pending sync PR
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 sync push used a command-scoped `url.insteadOf` rewrite without changing the persistent remote.
+- **Commit/PR**: #57
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 sync push and follow-up fetch used a command-scoped `url.insteadOf` rewrite without changing the persistent remote.
 
 ---
 
@@ -64,7 +64,7 @@ Before validating a branch-specific tool, confirm it is tracked on the current b
 
 ### Resolution
 - **Resolved**: 2026-08-24T03:04:21Z
-- **Commit/PR**: pending sync PR
+- **Commit/PR**: #57
 - **Notes**: Removed the inapplicable check from `main`; it will be run on the final `dev` branch.
 
 ---
@@ -130,13 +130,13 @@ Run the checked-in workspace binaries directly, such as `./node_modules/.bin/esl
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 2
+- Recurrence-Count: 3
 - Related Files: frontend/package.json
 
 ### Resolution
 - **Resolved**: 2026-08-23T08:34:00Z
 - **Commit/PR**: local workaround
-- **Notes**: Direct local binaries completed successfully with `eslint_status=0` and `typecheck_status=0`.
+- **Notes**: Direct local binaries completed successfully with `eslint_status=0` and `typecheck_status=0`; the 2026-08-24 sync also passed ESLint, Vue typecheck, and 165 critical Vitest cases this way.
 
 ---
 
@@ -237,5 +237,39 @@ Create unique task directories with `mktemp -d` and leave cleanup to the operati
 - **Resolved**: 2026-08-23T08:17:00Z
 - **Commit/PR**: local workaround
 - **Notes**: Replaced recursive cleanup with `mktemp -d`.
+
+---
+
+## [ERR-20260824-002] apply-patch-context-window
+
+**Logged**: 2026-08-24T03:23:34Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A patch expected a missing heading that was only outside the inspected line window.
+
+### Error
+```
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+- A `sed` window started one line after an existing `### Summary` heading.
+- The patch attempted to insert that heading together with unrelated metadata updates.
+- Re-reading with numbered lines confirmed the file was already correctly formatted.
+
+### Suggested Fix
+Use numbered context around the exact patch target before combining formatting assumptions with content edits.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-08-24T03:23:34Z
+- **Commit/PR**: pending dev sync PR
+- **Notes**: Applied a smaller patch limited to the fields that actually required updates.
 
 ---
