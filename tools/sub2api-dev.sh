@@ -103,6 +103,25 @@ wait_for_http() {
   die "$description 在 90 秒内未就绪"
 }
 
+wait_for_managed_http() {
+  local url="$1"
+  local description="$2"
+  local port="$3"
+  local expected_command="$4"
+  local listener
+
+  local _attempt
+  for _attempt in $(seq 1 90); do
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if [[ -n "$listener" ]] && curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  die "$description 在 90 秒内未就绪"
+}
+
 start_infrastructure() {
   require_command brew
   require_command pg_isready
@@ -167,6 +186,28 @@ ensure_port_available() {
   [[ -z "$listener" ]] || die "$name 端口 $port 已被 PID $listener 占用；请先停止旧进程"
 }
 
+ensure_ipv4_bind_available() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+
+  require_command python3
+  python3 - "$host" "$port" <<'PY' ||
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+finally:
+    sock.close()
+PY
+    die "$name 地址 $host:$port 无法绑定；请先停止冲突进程"
+}
+
 screen_session_identifier() {
   local session="$1"
   { screen -ls 2>/dev/null || true; } |
@@ -201,7 +242,7 @@ start_backend() {
   require_command go
   require_command curl
   require_command lsof
-  ensure_port_available "$SERVER_PORT" "后端"
+  ensure_ipv4_bind_available "$SERVER_HOST" "$SERVER_PORT" "后端"
 
   log "编译 Go 后端"
   (
@@ -212,7 +253,7 @@ start_backend() {
   log "通过 screen 启动 Go 后端"
   start_screen_job "$BACKEND_SESSION" "run-backend"
 
-  if ! wait_for_http "$BACKEND_URL/health" "Go 后端"; then
+  if ! wait_for_managed_http "$BACKEND_URL/health" "Go 后端" "$SERVER_PORT" "$BACKEND_BIN"; then
     tail -n 100 "$BACKEND_LOG" >&2 || true
     return 1
   fi
@@ -251,6 +292,22 @@ start_frontend() {
   fi
 }
 
+find_expected_listener() {
+  local port="$1"
+  local expected_command="$2"
+  local pid
+  local process_command
+
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    process_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$process_command" == *"$expected_command"* ]]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done < <(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+}
+
 stop_screen_job() {
   local name="$1"
   local session="$2"
@@ -259,10 +316,10 @@ stop_screen_job() {
   local identifier
   local listener
   identifier="$(screen_session_identifier "$session")"
-  listener="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  listener="$(find_expected_listener "$port" "$expected_command")"
 
   if [[ -z "$identifier" ]]; then
-    if [[ -z "$listener" ]] || [[ "$(ps -p "$listener" -o command= 2>/dev/null || true)" != *"$expected_command"* ]]; then
+    if [[ -z "$listener" ]]; then
       log "$name 未运行"
       return 0
     fi
@@ -278,16 +335,27 @@ stop_screen_job() {
 
   local _attempt
   for _attempt in $(seq 1 20); do
-    if ! screen_session_running "$session" && ! lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if ! screen_session_running "$session" && [[ -z "$listener" ]]; then
       return 0
     fi
     sleep 1
   done
 
+  listener="$(find_expected_listener "$port" "$expected_command")"
   if [[ -n "$listener" ]]; then
     log "$name 未在 20 秒内退出，发送 KILL"
     kill -KILL "$listener" 2>/dev/null || true
   fi
+
+  for _attempt in $(seq 1 10); do
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if ! screen_session_running "$session" && [[ -z "$listener" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
   die "$name 在 20 秒内未停止"
 }
 
