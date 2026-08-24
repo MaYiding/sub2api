@@ -7,7 +7,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/node</string>
-    <string>SYNC_ROOT/tools/cockpit-token-sync/daemon.sh</string>
+    <string>SYNC_ROOT/tools/cockpit-token-sync/sync.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -16,8 +16,8 @@
   </dict>
   <key>RunAtLoad</key>
   <true/>
-  <key>KeepAlive</key>
-  <true/>
+  <key>StartInterval</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
   <string>/tmp/sub2api-cockpit-token-sync.log</string>
   <key>StandardErrorPath</key>

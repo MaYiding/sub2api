@@ -119,6 +119,8 @@ type OpenAIQuotaService struct {
 	proxyRepo            ProxyRepository
 	tokenProvider        *OpenAITokenProvider
 	privacyClientFactory PrivacyClientFactory
+	tempUnschedCache     TempUnschedCache
+	runtimeBlocker       AccountRuntimeBlocker
 	agentIdentityTaskMu  sync.Mutex
 	agentIdentityWS      agentIdentityWSConnectionInvalidator
 }
@@ -210,6 +212,9 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
 		}
 	}
+	if openAIQuotaIsFullyAvailable(&payload) {
+		s.clearQuotaRuntimeStateBestEffort(ctx, accountID, "quota_query", false)
+	}
 	return &payload, nil
 }
 
@@ -261,6 +266,63 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 		).WithCause(err)
 	}
 	return nil
+}
+
+func openAIQuotaIsFullyAvailable(usage *OpenAIQuotaUsage) bool {
+	if usage == nil || usage.RateLimit == nil || !usage.RateLimit.Allowed || usage.RateLimit.LimitReached {
+		return false
+	}
+	for i := range usage.AdditionalRateLimits {
+		rateLimit := usage.AdditionalRateLimits[i].RateLimit
+		if rateLimit != nil && (!rateLimit.Allowed || rateLimit.LimitReached) {
+			return false
+		}
+	}
+	return true
+}
+
+// clearQuotaRuntimeStateBestEffort reconciles only account-wide runtime state.
+// Model-specific limits may describe permanent plan/model restrictions, so a
+// successful global quota query must never erase them.
+func (s *OpenAIQuotaService) clearQuotaRuntimeStateBestEffort(ctx context.Context, accountID int64, source string, force bool) {
+	if s == nil || s.accountRepo == nil {
+		return
+	}
+
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		slog.Warn("openai_quota_runtime_state_load_failed", "account_id", accountID, "source", source, "error", err)
+		return
+	}
+
+	clearRateLimit := force || account.RateLimitedAt != nil || account.RateLimitResetAt != nil || account.OverloadUntil != nil
+	clearTempUnschedulable := force || account.TempUnschedulableUntil != nil
+	cleared := true
+	if clearRateLimit {
+		if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
+			cleared = false
+			slog.Warn("openai_quota_clear_rate_limit_failed", "account_id", accountID, "source", source, "error", err)
+		}
+	}
+	if clearTempUnschedulable {
+		if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
+			cleared = false
+			slog.Warn("openai_quota_clear_temp_unschedulable_failed", "account_id", accountID, "source", source, "error", err)
+		} else if s.tempUnschedCache != nil {
+			if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
+				slog.Warn("openai_quota_clear_temp_unschedulable_cache_failed", "account_id", accountID, "source", source, "error", err)
+			}
+		}
+	}
+	if !cleared {
+		return
+	}
+	if s.runtimeBlocker != nil {
+		s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
+	}
+	if clearRateLimit || clearTempUnschedulable {
+		slog.Info("openai_quota_runtime_state_cleared", "account_id", accountID, "source", source)
+	}
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, client *req.Client, accessToken, chatGPTAccountID string, fedRAMP bool, accountID int64) *openAIRateLimitResetCreditDetails {
@@ -395,19 +457,10 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
-	// The upstream reset credit only changes OpenAI's quota window. Clear the
-	// local scheduler state as part of the same successful action so the
-	// account is not left in a stale cooldown until the old reset timestamp.
-	// This is best-effort: the upstream credit has already been consumed, so a
-	// local persistence failure must not make callers retry and consume another
-	// credit. A later quota probe or successful request can repair the state.
-	if s.accountRepo != nil {
-		if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
-			slog.Warn("openai_quota_reset_clear_runtime_state_failed", "account_id", accountID, "error", err)
-		} else {
-			slog.Info("openai_quota_reset_runtime_state_cleared", "account_id", accountID)
-		}
-	}
+	// The upstream reset credit only changes OpenAI's quota window. Reconcile
+	// account-wide scheduler state as part of the same successful action. This
+	// remains best-effort because the credit has already been consumed.
+	s.clearQuotaRuntimeStateBestEffort(ctx, accountID, "reset_credit", true)
 	return &payload, nil
 }
 

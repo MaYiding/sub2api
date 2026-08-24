@@ -10,11 +10,8 @@ mkdir -p "$SUPPORT_DIR" "$HOME/Library/LaunchAgents"
 
 cat >"$WRAPPER" <<EOF
 #!/bin/bash
-set -u
-while true; do
-  /opt/homebrew/bin/node "$ROOT/tools/cockpit-token-sync/sync.js" || true
-  sleep 30
-done
+set -euo pipefail
+exec /opt/homebrew/bin/node "$ROOT/tools/cockpit-token-sync/sync.js"
 EOF
 chmod 700 "$WRAPPER"
 
@@ -37,8 +34,8 @@ cat >"$PLIST" <<EOF
   </dict>
   <key>RunAtLoad</key>
   <true/>
-  <key>KeepAlive</key>
-  <true/>
+  <key>StartInterval</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
   <string>/tmp/sub2api-cockpit-token-sync.log</string>
   <key>StandardErrorPath</key>
