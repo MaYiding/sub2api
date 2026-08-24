@@ -475,3 +475,36 @@ Run mixed repository inspection from the repository root, or split backend test 
 - **Notes**: Re-ran source inspection from the repository root and the Go test from `backend/` separately.
 
 ---
+
+## [ERR-20260824-009] apply-patch-single-operation-per-file
+
+**Logged**: 2026-08-24T05:55:50Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+An automation-memory patch tried to delete and add the same file in one patch.
+
+### Error
+```
+apply_patch verification failed: invalid patch: multiple operations target the same file
+```
+
+### Context
+- The memory file needed a full-content replacement after the synchronization run.
+- `apply_patch` rejects multiple operations targeting one path in the same patch.
+
+### Suggested Fix
+Use one `Update File` operation when replacing an existing file's contents.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-24T05:56:00Z
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Replaced the delete/add pair with one update operation.
+
+---
