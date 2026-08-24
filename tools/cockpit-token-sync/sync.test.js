@@ -4,6 +4,7 @@ const test = require('node:test')
 const {
   accessTokenIssuedAt,
   credentialDirection,
+  credentialMetadataSnapshot,
   credentialsFromLocal,
   hasServerRateLimitState,
   mergeServerCredentials,
@@ -54,6 +55,17 @@ test('detects missing or semantically different OAuth metadata', () => {
 
   assert.equal(sameCredentialFields(credentials, serverCredentials), true)
   assert.equal(sameCredentialFields(credentials, { ...serverCredentials, expires_at: undefined }), false)
+})
+
+test('stores credential metadata without token material', () => {
+  const credentials = credentialsFromLocal(localAccount())
+  const snapshot = credentialMetadataSnapshot(credentials)
+
+  assert.equal(snapshot.email, credentials.email)
+  assert.equal(snapshot.expires_at, credentials.expires_at)
+  assert.equal(snapshot.access_token, undefined)
+  assert.equal(snapshot.refresh_token, undefined)
+  assert.equal(snapshot.id_token, undefined)
 })
 
 test('preserves server-only OAuth fields while applying local credentials', () => {

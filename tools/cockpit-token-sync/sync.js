@@ -177,6 +177,11 @@ function sameCredentialFields(expected, actual, includeTokens = true) {
     .every(([key, value]) => comparableCredentialValue(key, value) === comparableCredentialValue(key, actual[key]))
 }
 
+function credentialMetadataSnapshot(credentials) {
+  if (!credentials) return {}
+  return Object.fromEntries(Object.entries(credentials).filter(([key]) => !TOKEN_KEYS.includes(key)))
+}
+
 function mergeServerCredentials(serverAccount, localCredentials, tokenVersion = Date.now()) {
   return {
     ...((serverAccount && serverAccount.credentials) || {}),
@@ -446,6 +451,7 @@ function stateFor(local, serverMeta, serverAccount) {
     server_token_version: serverCredentialVersion(serverAccount),
     server_token_issued_at: credentialIssuedAt(credentialsFromServer(serverAccount)),
     local_token_updated_at: Number(local.value.token_updated_at) || 0,
+    local_credential_metadata: credentialMetadataSnapshot(local.credentials),
     initialized: true,
     last_sync_at: new Date().toISOString(),
   }
@@ -550,12 +556,12 @@ function main() {
 
     const localChanged = Number(local.value.token_updated_at) !== Number(previous.local_token_updated_at)
     const serverRecordChanged = (serverMeta.updated_at || '') !== (previous.server_updated_at || '')
-    const serverMetadataChanged = !sameCredentialFields(
+    const localMetadataChanged = !sameCredentialFields(
       local.credentials,
-      serverMeta.credentials || {},
+      previous.local_credential_metadata || {},
       false,
     )
-    if (!localChanged && !serverRecordChanged && !serverMetadataChanged) continue
+    if (!localChanged && !serverRecordChanged && !localMetadataChanged) continue
 
     const serverAccount = getExport([serverMeta.id]).find(account => account.name === email)
     const serverCredentials = credentialsFromServer(serverAccount)
@@ -648,6 +654,7 @@ module.exports = {
   accessTokenIssuedAt,
   accessTokenExpiresAt,
   credentialDirection,
+  credentialMetadataSnapshot,
   credentialsFromLocal,
   credentialsFromServer,
   mergeServerCredentials,
