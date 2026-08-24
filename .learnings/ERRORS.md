@@ -273,3 +273,38 @@ Use numbered context around the exact patch target before combining formatting a
 - **Notes**: Applied a smaller patch limited to the fields that actually required updates.
 
 ---
+
+## [ERR-20260824-003] dev-restart-multiple-listeners
+
+**Logged**: 2026-08-24T05:34:40Z
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The development restart could not stop the managed backend when an unrelated IPv6 listener shared port 8080.
+
+### Error
+```
+[sub2api-dev] Go 后端 未在 20 秒内退出，发送 KILL
+[sub2api-dev] ERROR: Go 后端 在 20 秒内未停止
+```
+
+### Context
+- `lsof -tiTCP:8080` returned both the managed IPv4 backend PID and Docker's IPv6 listener PID.
+- The script passed the newline-separated PID list as one argument to `kill`, so neither listener was signaled.
+- The screen session exited, but the managed backend process remained orphaned on `127.0.0.1:8080`.
+
+### Suggested Fix
+Select the listener whose command matches the managed application, ignore unrelated IPv6-only listeners during IPv4 availability checks, and recheck after a forced kill before reporting failure.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tools/sub2api-dev.sh
+
+### Resolution
+- **Resolved**: 2026-08-24T05:34:40Z
+- **Commit/PR**: pending restart-fix PR
+- **Notes**: Added command-aware listener selection and post-KILL verification while leaving Docker untouched.
+
+---

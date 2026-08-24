@@ -163,7 +163,9 @@ ensure_port_available() {
   local name="$2"
 
   local listener
-  listener="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  # The managed apps bind IPv4 explicitly. Ignore unrelated IPv6-only
+  # listeners (for example Docker on ::1) that can share the same port.
+  listener="$(lsof -ti4TCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
   [[ -z "$listener" ]] || die "$name 端口 $port 已被 PID $listener 占用；请先停止旧进程"
 }
 
@@ -251,6 +253,22 @@ start_frontend() {
   fi
 }
 
+find_expected_listener() {
+  local port="$1"
+  local expected_command="$2"
+  local pid
+  local process_command
+
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    process_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$process_command" == *"$expected_command"* ]]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done < <(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+}
+
 stop_screen_job() {
   local name="$1"
   local session="$2"
@@ -259,10 +277,10 @@ stop_screen_job() {
   local identifier
   local listener
   identifier="$(screen_session_identifier "$session")"
-  listener="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  listener="$(find_expected_listener "$port" "$expected_command")"
 
   if [[ -z "$identifier" ]]; then
-    if [[ -z "$listener" ]] || [[ "$(ps -p "$listener" -o command= 2>/dev/null || true)" != *"$expected_command"* ]]; then
+    if [[ -z "$listener" ]]; then
       log "$name 未运行"
       return 0
     fi
@@ -278,16 +296,27 @@ stop_screen_job() {
 
   local _attempt
   for _attempt in $(seq 1 20); do
-    if ! screen_session_running "$session" && ! lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if ! screen_session_running "$session" && [[ -z "$listener" ]]; then
       return 0
     fi
     sleep 1
   done
 
+  listener="$(find_expected_listener "$port" "$expected_command")"
   if [[ -n "$listener" ]]; then
     log "$name 未在 20 秒内退出，发送 KILL"
     kill -KILL "$listener" 2>/dev/null || true
   fi
+
+  for _attempt in $(seq 1 10); do
+    listener="$(find_expected_listener "$port" "$expected_command")"
+    if ! screen_session_running "$session" && [[ -z "$listener" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
   die "$name 在 20 秒内未停止"
 }
 
