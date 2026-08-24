@@ -454,6 +454,7 @@ run_backend_foreground() {
 
 run_frontend_foreground() {
   [[ -x "$FRONTEND_DIR/node_modules/.bin/vite" ]] || die "前端依赖不存在，请先运行 start"
+  export VITE_DEV_PROXY_TARGET="$BACKEND_URL"
   exec >>"$FRONTEND_LOG" 2>&1
   cd "$FRONTEND_DIR"
   exec ./node_modules/.bin/vite

@@ -80,7 +80,9 @@ function injectPublicSettings(backendUrl: string): Plugin {
 export default defineConfig(({ mode }) => {
   // 加载环境变量
   const env = loadEnv(mode, process.cwd(), '')
-  const backendUrl = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8080'
+  // Keep the local proxy on IPv4. On macOS, localhost may resolve to ::1 and
+  // hit an unrelated Docker-published port while Sub2API listens on 127.0.0.1.
+  const backendUrl = env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:8080'
   const devPort = Number(env.VITE_DEV_PORT || 3000)
 
   return {
