@@ -31,7 +31,108 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 sync push and follow-up fetch used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 and 2026-08-25 sync pushes/fetches used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
+
+---
+
+## [ERR-20260825-001] pnpm-non-tty-modules-rebuild
+
+**Logged**: 2026-08-25T03:03:45Z
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Frontend validation could not start because pnpm required a non-interactive `node_modules` rebuild.
+
+### Error
+```
+[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules directory due to no TTY
+```
+
+### Context
+- Ran the frontend lint, typecheck, Vitest, and build commands after merging the latest upstream `main`.
+- The existing `node_modules` metadata was produced by a different pnpm version, so the current pnpm wrapper attempted an implicit install and refused to purge dependencies without a TTY.
+
+### Suggested Fix
+Run `CI=true pnpm install --frozen-lockfile` explicitly before non-interactive frontend validation when the pnpm version or modules metadata has changed.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json, frontend/pnpm-lock.yaml
+
+### Resolution
+- **Resolved**: 2026-08-25T03:07:45Z
+- **Commit/PR**: #62 validation
+- **Notes**: Ran frontend validation through `npx pnpm@9.15.9`; ESLint, Vue typecheck, and all 244 Vitest files / 1744 tests passed without rebuilding dependencies.
+
+---
+
+## [ERR-20260825-002] missing-golangci-lint-binary
+
+**Logged**: 2026-08-25T03:13:00Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The backend `make test` target completed all Go tests but could not start its lint phase because `golangci-lint` was not installed locally.
+
+### Error
+```
+make: golangci-lint: No such file or directory
+make: *** [test] Error 1
+```
+
+### Context
+- The repository CI pins golangci-lint v2.13.
+- `go test ./...` passed before Make reached the missing binary.
+
+### Suggested Fix
+For automation hosts without a global install, run the CI-pinned linter with `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.0 run ./...`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/Makefile, .github/workflows/backend-ci.yml
+
+### Resolution
+- **Resolved**: 2026-08-25T03:14:30Z
+- **Commit/PR**: #62 validation
+- **Notes**: The CI-pinned v2.13.0 linter completed with 0 issues; GitHub's golangci-lint checks also passed.
+
+---
+
+## [ERR-20260825-003] concurrent-sync-merge-state
+
+**Logged**: 2026-08-25T03:37:30Z
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A parallel synchronization process changed branches and left a stale main-to-dev merge in progress while the upstream refresh was still advancing.
+
+### Error
+```
+fatal: cannot switch branch while merging
+```
+
+### Context
+- The pending merge targeted an older `origin/main` while upstream had already advanced again.
+- Read-only inspection confirmed the merge had no manual conflict-resolution work to preserve.
+- The stale merge was aborted only after verifying the branch HEAD, MERGE_HEAD, and worktree state.
+
+### Suggested Fix
+Before each branch transition in a shared automation workspace, inspect `git status`, `MERGE_HEAD`, and active Git processes; abort only a verified stale, uncommitted merge and restart from refreshed remote refs.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-25T03:37:30Z
+- **Commit/PR**: pending dev sync PR
+- **Notes**: Aborted the stale merge, refreshed and merged main via PRs #63-#64, then restarted the main-to-dev merge from the final origin/main.
 
 ---
 
