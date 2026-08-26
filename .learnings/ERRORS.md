@@ -1,10 +1,79 @@
 # Error Log
 
+## [ERR-20260826-004] testcontainers-reaper-name-collision
+
+**Logged**: 2026-08-26T08:02:26Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The local integration suite hit a transient Testcontainers reaper-name collision while Go test packages were running concurrently.
+
+### Error
+```
+Error response from daemon: Conflict. The container name "/reaper_9cad487e74debd6dd449d663840bb909810cd2f88d993c371ebc2c924d9ff6db" is already in use
+```
+
+### Context
+- Ran `go test -tags=integration ./...` after the tagged unit suite passed.
+- `TestRateLimiterSetsTTLAndDoesNotRefresh` failed before its assertions while creating the Redis test container.
+- The named reaper container had already disappeared by the time Docker was inspected, confirming it was transient test infrastructure rather than a persistent application container.
+
+### Suggested Fix
+Rerun the integration packages serially with `go test -p 1 -tags=integration ./...` after confirming the transient reaper container is gone.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: backend/internal/middleware/rate_limiter_integration_test.go, backend/Makefile
+
+### Resolution
+- **Resolved**: 2026-08-26T08:04:35Z
+- **Commit/PR**: pending dev sync PR
+- **Notes**: Confirmed the transient reaper was already gone; the full integration suite passed with package concurrency limited to one.
+
+---
+
+## [ERR-20260826-003] go-unit-transient-import-open
+
+**Logged**: 2026-08-26T07:56:29Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+A local tagged Go unit-test build transiently failed to open imports, including the standard-library `fmt` package, while frontend dependency reconstruction was running in parallel.
+
+### Error
+```
+could not import fmt (open : no such file or directory)
+could not import github.com/Wei-Shaw/sub2api/ent/user (open : no such file or directory)
+```
+
+### Context
+- Ran `GOTOOLCHAIN=auto make test-unit test-integration` after the latest upstream refresh.
+- Most packages passed; only `internal/service_test` failed during compilation before its assertions ran.
+- The untagged full Go suite had passed earlier, and GitHub CI for the same branch was still running without this compiler error.
+
+### Suggested Fix
+Rerun the tagged Go suites serially after the concurrent dependency reconstruction finishes; if the failure recurs, inspect and clean only the Go build cache before retrying.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: backend/internal/service/auth_service_email_bind_test.go, backend/Makefile
+
+### Resolution
+- **Resolved**: 2026-08-26T08:04:35Z
+- **Commit/PR**: pending dev sync PR
+- **Notes**: A serial rerun completed the full tagged unit suite, including `internal/service`, without cleaning caches or changing code.
+
+---
+
 ## [ERR-20260826-002] pnpm-non-tty-modules-rebuild-recurrence
 
 **Logged**: 2026-08-26T07:55:37Z
 **Priority**: medium
-**Status**: in_progress
+**Status**: resolved
 **Area**: frontend
 
 ### Summary
@@ -13,20 +82,27 @@ Frontend validation again stopped before tests because pnpm required confirmatio
 ### Error
 ```
 [ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules directory due to no TTY
+[ERR_PNPM_LOCKFILE_CONFIG_MISMATCH] Cannot proceed with the frozen installation.
 ```
 
 ### Context
 - Ran `make test-frontend` after deleting 805 system-created dependency duplicates with numbered suffixes.
 - The pnpm wrapper detected that the remaining modules directory needed rebuilding and refused the non-interactive purge.
+- Retrying with global pnpm 11.5.0 and `CI=true` rebuilt the directory but ignored package-level overrides, so its frozen-lockfile check disagreed with the pnpm 9 lockfile.
 - No frontend lint, typecheck, or Vitest assertion had run or failed yet.
 
 ### Suggested Fix
-Set `CI=true` for the explicit frozen-lockfile install/rebuild and subsequent non-interactive frontend validation.
+Use the CI-compatible pnpm 9.15.9 explicitly with `CI=true` for the frozen-lockfile install/rebuild and subsequent non-interactive frontend validation.
 
 ### Metadata
 - Reproducible: yes
 - Related Files: frontend/package.json, frontend/pnpm-lock.yaml, Makefile
 - See Also: ERR-20260825-001
+
+### Resolution
+- **Resolved**: 2026-08-26T08:04:35Z
+- **Commit/PR**: pending dev sync PR
+- **Notes**: Rebuilt dependencies with `CI=true npx --yes pnpm@9.15.9 --dir frontend install --frozen-lockfile`; ESLint, Vue typecheck, and all 245 Vitest files / 1746 tests passed.
 
 ---
 
