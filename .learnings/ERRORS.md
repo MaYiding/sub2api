@@ -1,5 +1,35 @@
 # Error Log
 
+## [ERR-20260826-002] pnpm-non-tty-modules-rebuild-recurrence
+
+**Logged**: 2026-08-26T07:55:37Z
+**Priority**: medium
+**Status**: in_progress
+**Area**: frontend
+
+### Summary
+Frontend validation again stopped before tests because pnpm required confirmation to rebuild `node_modules` after duplicate dependency directories were removed.
+
+### Error
+```
+[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules directory due to no TTY
+```
+
+### Context
+- Ran `make test-frontend` after deleting 805 system-created dependency duplicates with numbered suffixes.
+- The pnpm wrapper detected that the remaining modules directory needed rebuilding and refused the non-interactive purge.
+- No frontend lint, typecheck, or Vitest assertion had run or failed yet.
+
+### Suggested Fix
+Set `CI=true` for the explicit frozen-lockfile install/rebuild and subsequent non-interactive frontend validation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json, frontend/pnpm-lock.yaml, Makefile
+- See Also: ERR-20260825-001
+
+---
+
 ## [ERR-20260826-001] zsh-unmatched-root-glob
 
 **Logged**: 2026-08-26T07:33:00Z
@@ -59,13 +89,13 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 7
+- Recurrence-Count: 8
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 and 2026-08-25 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-26 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
 
 ---
 
