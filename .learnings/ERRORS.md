@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260826-001] zsh-unmatched-root-glob
+
+**Logged**: 2026-08-26T07:33:00Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A read-only configuration search stopped early because zsh rejected unmatched root-level Docker Compose globs.
+
+### Error
+```
+zsh:6: no matches found: docker-compose*.yml
+```
+
+### Context
+- Searched project manifests and common port declarations after merging upstream `main`.
+- Docker Compose files live under `deploy/`, so the root-level glob had no matches.
+- Commands before the unmatched glob completed; the merge and working tree were unaffected.
+
+### Suggested Fix
+Use `find`/`rg --files` to enumerate optional files, or enable a null-glob locally instead of passing unmatched globs to zsh.
+
+### Metadata
+- Reproducible: yes
+- Related Files: deploy/docker-compose.dev.yml, deploy/docker-compose.local.yml
+
+### Resolution
+- **Resolved**: 2026-08-26T07:33:00Z
+- **Commit/PR**: pending sync PR
+- **Notes**: Continued discovery with `find`-resolved paths and avoided optional shell globs.
+
+---
+
 ## [ERR-20260823-001] git-push-github-https
 
 **Logged**: 2026-08-23T03:06:34Z
