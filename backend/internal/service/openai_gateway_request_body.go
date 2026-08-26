@@ -55,6 +55,69 @@ func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
 	return buildOpenAIResponsesURL(base)
 }
 
+func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.IsOpenAIOAuthLike() {
+		return true
+	}
+	if !account.IsOpenAIApiKey() {
+		return false
+	}
+	baseURL := strings.TrimSpace(account.GetCredential("base_url"))
+	return baseURL == "" || isOfficialOpenAIModelsBaseURL(baseURL)
+}
+
+// Codex 0.149.0 needs a single advertised effort to directly select a visible
+// non-reasoning model. Treat that catalog-only "none" value as omission for
+// compatible upstreams, while preserving official OpenAI request semantics.
+func filterOpenAIResponsesNoneReasoningEffortForAccount(account *Account, body []byte) ([]byte, error) {
+	if len(body) == 0 || shouldPreserveOpenAIResponsesNoneReasoningEffort(account) {
+		return body, nil
+	}
+
+	out := body
+	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
+		effort := gjson.GetBytes(out, path)
+		if effort.Type != gjson.String || !strings.EqualFold(strings.TrimSpace(effort.String()), "none") {
+			continue
+		}
+		next, err := sjson.DeleteBytes(out, path)
+		if err != nil {
+			return body, fmt.Errorf("strip %s none placeholder: %w", path, err)
+		}
+		out = next
+	}
+	if reasoning := gjson.GetBytes(out, "reasoning"); reasoning.IsObject() && len(reasoning.Map()) == 0 {
+		next, err := sjson.DeleteBytes(out, "reasoning")
+		if err != nil {
+			return body, fmt.Errorf("strip empty reasoning object: %w", err)
+		}
+		out = next
+	}
+	return out, nil
+}
+
+func deleteOpenAIResponsesNoneReasoningEffortFromObject(account *Account, body map[string]any) {
+	if body == nil || shouldPreserveOpenAIResponsesNoneReasoningEffort(account) {
+		return
+	}
+	if effort, ok := body["reasoning_effort"].(string); ok && strings.EqualFold(strings.TrimSpace(effort), "none") {
+		delete(body, "reasoning_effort")
+	}
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok {
+		return
+	}
+	if effort, ok := reasoning["effort"].(string); ok && strings.EqualFold(strings.TrimSpace(effort), "none") {
+		delete(reasoning, "effort")
+	}
+	if len(reasoning) == 0 {
+		delete(body, "reasoning")
+	}
+}
+
 // normalizeDeepSeekResponsesRequestBody 适配 DeepSeek 无状态 Responses 端点：
 // 强制 store=false 并清除 previous_response_id（官方 /responses 不支持服务端
 // 状态存储，携带这些字段会被拒绝）。非 deepseek responses 协议账号原样返回。
@@ -349,7 +412,7 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		}
 		normalized = next
 	}
-	if next, removed, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized); err != nil {
+	if next, removed, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized, false); err != nil {
 		return body, false, err
 	} else if removed {
 		normalized = next
@@ -361,7 +424,10 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 	return normalized, true, nil
 }
 
-func normalizeOpenAIParallelToolCallsWithoutTools(body []byte) ([]byte, bool, error) {
+func normalizeOpenAIParallelToolCallsWithoutTools(body []byte, responsesLite bool) ([]byte, bool, error) {
+	if responsesLite {
+		return body, false, nil
+	}
 	parallel := gjson.GetBytes(body, "parallel_tool_calls")
 	if !parallel.Exists() {
 		return body, false, nil
@@ -376,16 +442,7 @@ func normalizeOpenAIParallelToolCallsWithoutTools(body []byte) ([]byte, bool, er
 	return normalized, true, nil
 }
 
-// openAIRequestBodyHasTools is the []byte counterpart of openAIResponsesLiteHasTools:
-// besides the top-level "tools" array it also recognizes the Responses Lite carrier.
-// normalizeOpenAIResponsesLiteTools moves namespace tools into an input item of type
-// "additional_tools" and drops the top-level "tools" key; the request still carries
-// tools at that point. Looking only at the top level therefore misreads such a body as
-// "no tools" and deletes the parallel_tool_calls:false that
-// ensureOpenAIResponsesLiteParallelToolCalls had just pinned, and OpenAI falls back to
-// its default of true and rejects the request with
-// 400 unsupported_value: "X-OpenAI-Internal-Codex-Responses-Lite requires
-// `parallel_tool_calls` to be false."
+// openAIRequestBodyHasTools 同时识别顶层 tools 和 input[].additional_tools。
 func openAIRequestBodyHasTools(body []byte) bool {
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
 		return true
@@ -948,7 +1005,7 @@ func normalizeOpenAIResponseFormatSchemasBody(body []byte) ([]byte, bool, error)
 	return normalized, true, nil
 }
 
-func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account) ([]byte, bool, error) {
+func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account, responsesLite bool) ([]byte, bool, error) {
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
@@ -962,7 +1019,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 		}
 	}
 	if account.IsOpenAIApiKey() {
-		if next, normalizedParallel, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized); err != nil {
+		if next, normalizedParallel, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized, responsesLite); err != nil {
 			return body, false, err
 		} else if normalizedParallel {
 			normalized = next
