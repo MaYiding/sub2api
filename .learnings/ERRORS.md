@@ -608,6 +608,8 @@ Use `rg` directory filters, quote the pattern, or resolve optional files with `r
 
 ### Metadata
 - Reproducible: yes
+- Recurrence-Count: 2
+- Last-Seen: 2026-08-27
 - Related Files: none
 
 ### Resolution
