@@ -34,6 +34,39 @@ Rerun the integration packages serially with `go test -p 1 -tags=integration ./.
 
 ---
 
+## [ERR-20260827-001] functions-exec-object-literal-quote
+
+**Logged**: 2026-08-27T03:04:07Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A malformed quote in a `functions.exec` JavaScript object prevented a GitHub label query from running.
+
+### Error
+```
+SyntaxError: Unexpected identifier 'max_output_tokens'
+```
+
+### Context
+- The `workdir` string ended with an extra quote before the `yield_time_ms` property.
+- The nested command was not invoked, so no repository or GitHub state changed.
+
+### Suggested Fix
+Keep tool-call object properties on separate lines and verify string delimiters before submitting JavaScript orchestration code.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-27T03:04:07Z
+- **Commit/PR**: #70
+- **Notes**: Corrected the object literal, reran the label query, and added the available automation labels.
+
+---
+
 ## [ERR-20260826-003] go-unit-transient-import-open
 
 **Logged**: 2026-08-26T07:56:29Z
