@@ -232,13 +232,14 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 8
+- Recurrence-Count: 10
+- Last-Seen: 2026-08-28
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-26 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
 
 ---
 
