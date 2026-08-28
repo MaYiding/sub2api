@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260828-001] parallel-diagnostic-command-omission
+
+**Logged**: 2026-08-28T11:02:18+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A parallel diagnostic tuple stored only the arguments for a Git command, so zsh tried to execute `status` directly.
+
+### Error
+```
+zsh:1: command not found: status
+```
+
+### Context
+- A JavaScript orchestration tuple used `git` as the result label and `status --short ...` as the shell command.
+- The shell call therefore omitted the `git` executable.
+- The failed command was read-only; no repository or remote state changed.
+
+### Suggested Fix
+Keep display labels separate from complete, independently executable command strings in parallel diagnostic arrays.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-28T11:02:18+08:00
+- **Commit/PR**: pending dev maintenance PR
+- **Notes**: Re-ran the inspection with an explicit `git status` command and confirmed a clean `dev` worktree.
+
+---
+
 ## [ERR-20260826-004] testcontainers-reaper-name-collision
 
 **Logged**: 2026-08-26T08:02:26Z
