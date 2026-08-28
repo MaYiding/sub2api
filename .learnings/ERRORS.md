@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260828-001] parallel-diagnostic-command-omission
+
+**Logged**: 2026-08-28T11:02:18+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A parallel diagnostic tuple stored only the arguments for a Git command, so zsh tried to execute `status` directly.
+
+### Error
+```
+zsh:1: command not found: status
+```
+
+### Context
+- A JavaScript orchestration tuple used `git` as the result label and `status --short ...` as the shell command.
+- The shell call therefore omitted the `git` executable.
+- The failed command was read-only; no repository or remote state changed.
+
+### Suggested Fix
+Keep display labels separate from complete, independently executable command strings in parallel diagnostic arrays.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-28T11:02:18+08:00
+- **Commit/PR**: pending dev maintenance PR
+- **Notes**: Re-ran the inspection with an explicit `git status` command and confirmed a clean `dev` worktree.
+
+---
+
 ## [ERR-20260826-004] testcontainers-reaper-name-collision
 
 **Logged**: 2026-08-26T08:02:26Z
@@ -198,13 +232,14 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 8
+- Recurrence-Count: 10
+- Last-Seen: 2026-08-28
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-26 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. A later GraphQL status poll hit a transient EOF and succeeded on retry.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
 
 ---
 
