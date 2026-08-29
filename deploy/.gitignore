@@ -17,3 +17,5 @@ redis_data/
 # Temporary files
 *.tmp
 *.log
+.blue-green/
+.blue-green-active
