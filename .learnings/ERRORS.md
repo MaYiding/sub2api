@@ -1,5 +1,75 @@
 # Error Log
 
+## [ERR-20260829-001] git-push-github-https-reset
+
+**Logged**: 2026-08-29T11:22:41+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+GitHub reset the HTTPS connection while pushing the validated dev-sync branch, so the immediately following PR creation could not find the head ref.
+
+### Error
+```
+fatal: unable to access 'https://github.com/MaYiding/sub2api.git/': Recv failure: Connection reset by peer
+pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between dev and agent/sync-main-into-dev-20260829, Head ref must be a branch
+```
+
+### Context
+- The branch was clean and had passed the complete local backend and frontend suites.
+- The push failed before any remote ref was created; the PR command therefore had no valid head branch.
+- The repository had previously recovered from the same GitHub HTTPS reset by pushing over SSH port 22.
+
+### Suggested Fix
+Retry the same non-force push over SSH port 22, then create the PR only after confirming the remote branch exists.
+
+### Metadata
+- Reproducible: intermittent
+- Related Files: none
+- See Also: ERR-20260823-001
+
+### Resolution
+- **Resolved**: 2026-08-29T11:23:26+08:00
+- **Commit/PR**: current dev-sync PR
+- **Notes**: The same commit pushed successfully over SSH port 22; the remote branch was confirmed before retrying PR creation.
+
+---
+
+## [ERR-20260828-002] stale-duplicate-delete-batch
+
+**Logged**: 2026-08-28T16:24:27+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A duplicate-file cleanup patch used a previously enumerated list after another workspace process had already removed one target.
+
+### Error
+```
+apply_patch verification failed: Failed to read .learnings/LEARNINGS 2.md: No such file or directory
+```
+
+### Context
+- Nine numbered duplicate files were enumerated and verified against their canonical originals.
+- Before the delete patch ran, at least one target disappeared and the active branch also changed, indicating concurrent workspace activity.
+- The patch failed atomically before the subsequent Git fetch commands ran.
+
+### Suggested Fix
+Re-enumerate numbered duplicates immediately before deletion and avoid batching stale targets when concurrent workspace activity is detected.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: .learnings/LEARNINGS 2.md
+
+### Resolution
+- **Resolved**: 2026-08-28T16:24:27+08:00
+- **Commit/PR**: current dev-sync PR
+- **Notes**: Rechecked the live worktree and resumed from a clean branch without carrying conflict markers forward.
+
+---
+
 ## [ERR-20260828-001] parallel-diagnostic-command-omission
 
 **Logged**: 2026-08-28T11:02:18+08:00
