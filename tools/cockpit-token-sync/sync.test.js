@@ -241,3 +241,18 @@ test('bounds every remote request with SSH and process timeouts', () => {
     error: Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
   })), /timed out/)
 })
+
+test('resolves the active blue-green container and port on the server', () => {
+  let remoteScript
+  remoteRequest('/admin/accounts', 'GET', '', (_command, args) => {
+    remoteScript = args.at(-1)
+    return { status: 0, stdout: '{}' }
+  })
+
+  assert.match(remoteScript, /\.blue-green-active/)
+  assert.match(remoteScript, /active_container/)
+  assert.match(remoteScript, /active_port/)
+  assert.match(remoteScript, /docker inspect "\$container"/)
+  assert.match(remoteScript, /base_url="http:\/\/127\.0\.0\.1:\$\{port\}\/api\/v1"/)
+  assert.doesNotMatch(remoteScript, /api\/v1\/auth\/login\)"`/)
+})
