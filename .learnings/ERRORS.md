@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260828-002] stale-duplicate-delete-batch
+
+**Logged**: 2026-08-28T16:24:27+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A duplicate-file cleanup patch used a previously enumerated list after another workspace process had already removed one target.
+
+### Error
+```
+apply_patch verification failed: Failed to read .learnings/LEARNINGS 2.md: No such file or directory
+```
+
+### Context
+- Nine numbered duplicate files were enumerated and verified against their canonical originals.
+- Before the delete patch ran, at least one target disappeared and the active branch also changed, indicating concurrent workspace activity.
+- The patch failed atomically before the subsequent Git fetch commands ran.
+
+### Suggested Fix
+Re-enumerate numbered duplicates immediately before deletion and avoid batching stale targets when concurrent workspace activity is detected.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: .learnings/LEARNINGS 2.md
+
+### Resolution
+- **Resolved**: 2026-08-28T16:24:27+08:00
+- **Commit/PR**: current dev-sync PR
+- **Notes**: Rechecked the live worktree and resumed from a clean branch without carrying conflict markers forward.
+
+---
+
 ## [ERR-20260828-001] parallel-diagnostic-command-omission
 
 **Logged**: 2026-08-28T11:02:18+08:00
