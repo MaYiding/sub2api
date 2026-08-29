@@ -67,6 +67,10 @@ manage PostgreSQL and Redis.
 - Both versions use the same PostgreSQL and Redis services. Database migrations
   must be backward-compatible while both versions overlap; use expand/contract
   migrations and keep a database backup before a schema-changing release.
+- Host automation that calls the private application API must resolve the
+  active container and port from `.blue-green-active`. The source-managed
+  low-balance job is `sub2api-auto-recharge.py`; do not hardcode port `8080` in
+  scheduled jobs.
 - Caddy is switched only after candidate health and a monitor window pass. If
   either step fails, Caddy is restored and the old container remains available.
 - Existing long-lived requests are given a drain window. The application’s

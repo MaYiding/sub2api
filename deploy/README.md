@@ -19,6 +19,7 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
 | `blue-green-deploy.sh` | Pre-built image blue-green deployment with health gate and rollback |
 | `BLUE_GREEN.md` | Blue-green deployment preparation and operating procedure |
+| `sub2api-auto-recharge.py` | Source-managed low-balance recharge job; follows the active blue-green slot |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |
@@ -57,6 +58,11 @@ candidate, and hot-reloads Caddy before draining the old container.
 
 The workflow requires a pre-built `linux/amd64` image. It never builds on the
 production host and never uses `docker compose down`.
+
+The automatic recharge service must run the source-managed
+`sub2api-auto-recharge.py`. It reads `deploy/.blue-green-active` and uses the
+active container and loopback port, so a blue-green cutover does not silently
+disable scheduled balance checks.
 
 ---
 
