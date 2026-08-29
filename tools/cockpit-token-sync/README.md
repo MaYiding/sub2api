@@ -11,7 +11,8 @@ This tool synchronizes matching OpenAI OAuth accounts between the local Cockpit 
 - Local OAuth uploads include `expires_at` derived from the access-token JWT, plus any supported optional OAuth metadata present locally. Server-only credential metadata is preserved during an upload.
 - If the tokens already match but server metadata is missing or stale, the tool still repairs the server credential record.
 - Generic account updates (usage refreshes, quota probes, notes, and scheduler state) are not treated as credential changes. Server credential changes are tracked with `_token_version`; divergent tokens use JWT issue time as a deterministic tie-breaker.
-- For matching local OpenAI accounts that the server marks account-level rate-limited, the sync pass probes upstream quota at most once per minute. A successful, fully available quota response makes the server clear stale account-level cooldowns itself without changing credentials or consuming a reset credit. Model-specific restrictions remain intact.
+- The server account list is paginated, and local OAuth accounts missing on the server are created with their complete credential metadata. Non-OAuth local records are excluded from this OAuth sync.
+- For matching local OpenAI accounts that the server marks `error`, non-schedulable, or account-level rate-limited, the sync pass probes upstream quota at most once per minute. A successful, fully available quota response calls the server runtime-recovery endpoint to clear stale account-level state without changing credentials or consuming a reset credit. Model-specific restrictions remain intact.
 - If both sides changed and token age cannot establish a newer copy, the tool stops for that account instead of guessing.
 - Before a server-to-Cockpit pull, the previous encrypted envelope is saved under `/Volumes/MacData/09_tmp/cockpit-token-sync-backups/`.
 

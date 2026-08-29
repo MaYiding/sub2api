@@ -17,6 +17,9 @@ const SERVER_HOST = process.env.SUB2API_SYNC_HOST || '104.36.67.199'
 const SERVER_USER = process.env.SUB2API_SYNC_USER || 'root'
 const SERVER_API = 'http://127.0.0.1:8080/api/v1'
 const ACCOUNT_PAGE_SIZE = 200
+const MAX_ACCOUNT_PAGES = 100
+const DEFAULT_ACCOUNT_CONCURRENCY = 10
+const DEFAULT_ACCOUNT_PRIORITY = 2
 const RATE_LIMIT_PROBE_INTERVAL_MS = 60 * 1000
 const REMOTE_REQUEST_TIMEOUT_MS = positiveIntegerEnv('SUB2API_SYNC_REQUEST_TIMEOUT_MS', 40 * 1000)
 const REMOTE_CURL_TIMEOUT_SECONDS = positiveIntegerEnv('SUB2API_SYNC_CURL_TIMEOUT_SECONDS', 15)
@@ -311,10 +314,16 @@ function unwrap(response) {
   return response && response.data !== undefined ? response.data : response
 }
 
-function listServerAccounts() {
-  const response = remoteRequest(`/admin/accounts?page=1&page_size=${ACCOUNT_PAGE_SIZE}`)
-  const payload = unwrap(response)
-  return Array.isArray(payload.items) ? payload.items : []
+function listServerAccounts(request = remoteRequest) {
+  const accounts = []
+  for (let page = 1; page <= MAX_ACCOUNT_PAGES; page++) {
+    const response = request(`/admin/accounts?page=${page}&page_size=${ACCOUNT_PAGE_SIZE}`)
+    const payload = unwrap(response)
+    const items = Array.isArray(payload && payload.items) ? payload.items : []
+    accounts.push(...items)
+    if (items.length < ACCOUNT_PAGE_SIZE) return accounts
+  }
+  fail(`server account pagination exceeded ${MAX_ACCOUNT_PAGES} pages`)
 }
 
 function exportServerAccounts(ids = []) {
@@ -339,9 +348,53 @@ function applyServerCredentials(id, credentials, serverAccount = null) {
   return { ...(serverAccount || {}), credentials: mergedCredentials }
 }
 
+function serverAccountCreatePayload(local, tokenVersion = Date.now()) {
+  return {
+    name: local.email,
+    platform: 'openai',
+    type: 'oauth',
+    credentials: mergeServerCredentials(null, local.credentials, tokenVersion),
+    extra: {},
+    concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
+    priority: DEFAULT_ACCOUNT_PRIORITY,
+    rate_multiplier: 1,
+  }
+}
+
+function createServerAccount(local, request = remoteRequest) {
+  const response = request(
+    '/admin/accounts',
+    'POST',
+    JSON.stringify(serverAccountCreatePayload(local)),
+  )
+  if (response && response.code !== undefined && response.code !== 0) {
+    fail(`server rejected account creation for ${local.email}`)
+  }
+  const payload = unwrap(response)
+  const id = Number(payload && payload.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    fail(`server account creation returned no account id for ${local.email}`)
+  }
+  return id
+}
+
+function recoverServerRuntimeState(id, request = remoteRequest) {
+  const response = request(
+    `/admin/accounts/${encodeURIComponent(id)}/recover-state`,
+    'POST',
+    '{}',
+  )
+  if (response && response.code !== undefined && response.code !== 0) {
+    fail(`server rejected runtime recovery for account ${id}`)
+  }
+  return unwrap(response)
+}
+
 function hasServerRateLimitState(account) {
   return Boolean(
     account && (
+      account.status === 'error' ||
+      account.schedulable === false ||
       account.rate_limited_at ||
       account.rate_limit_reset_at ||
       account.overload_until ||
@@ -376,6 +429,7 @@ function loadLocalAccounts() {
     if (!fs.existsSync(filePath)) continue
     try {
       const { envelope, value } = decryptAccount(filePath)
+      if (value.auth_mode && value.auth_mode !== 'oauth') continue
       const credentials = credentialsFromLocal(value)
       if (!credentials) continue
       result.set(value.email, {
@@ -478,16 +532,23 @@ function reconcileServerRateLimits(serverMetas, localByEmail, state) {
       changed = true
     }
 
+    let quota
     try {
-      const quota = queryServerOpenAIQuota(serverMeta.id)
-      if (!openAIQuotaIsAvailable(quota)) continue
-      if (dryRun) {
-        log(`would reconcile server quota state ${email}: upstream quota is available`)
-      } else {
-        log(`reconciled server quota state ${email}: upstream quota is available`)
-      }
+      quota = queryServerOpenAIQuota(serverMeta.id)
     } catch (error) {
       log(`rate-limit probe skipped ${email}: ${error instanceof Error ? error.message : 'probe failed'}`)
+      continue
+    }
+    if (!openAIQuotaIsAvailable(quota)) continue
+    if (dryRun) {
+      log(`would recover server runtime state ${email}: upstream quota is available`)
+      continue
+    }
+    try {
+      recoverServerRuntimeState(serverMeta.id)
+      log(`recovered server runtime state ${email}: upstream quota is available`)
+    } catch (error) {
+      log(`server runtime recovery skipped ${email}: ${error instanceof Error ? error.message : 'recovery failed'}`)
     }
   }
   return changed
@@ -512,7 +573,21 @@ function main() {
 
   for (const [email, local] of localByEmail) {
     const serverMeta = serverByEmail.get(email)
-    if (!serverMeta) continue
+    if (!serverMeta) {
+      if (dryRun) {
+        log(`would create ${email}: local OAuth account is missing on server`)
+      } else {
+        const serverId = createServerAccount(local)
+        const refreshedMeta = listServerAccounts().find(account => account.id === serverId)
+        if (!refreshedMeta) fail(`created server account ${serverId} for ${email} was not found after creation`)
+        const serverAccount = getExport([serverId]).find(account => account.name === email)
+        if (!serverAccount) fail(`created server account ${serverId} for ${email} has no credential export`)
+        state.accounts[email] = stateFor(local, refreshedMeta, serverAccount)
+        changed = true
+        log(`created ${email}: local OAuth account -> server`)
+      }
+      continue
+    }
     const previous = state.accounts[email]
 
     if (!previous || previous.server_id !== serverMeta.id || previous.initialized !== true) {
@@ -670,12 +745,16 @@ module.exports = {
   credentialsFromServer,
   mergeServerCredentials,
   hasServerRateLimitState,
+  listServerAccounts,
   openAIQuotaIsAvailable,
   remoteRequest,
   sameCredentialFields,
   sameCredentialMetadata,
   sameTokens,
+  serverAccountCreatePayload,
   serverCredentialVersion,
   serverCredentialsChanged,
+  recoverServerRuntimeState,
+  createServerAccount,
   syncCredentialDirection,
 }
