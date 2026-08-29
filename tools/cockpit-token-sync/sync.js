@@ -15,7 +15,8 @@ const BACKUP_DIR = process.env.COCKPIT_TOKEN_SYNC_BACKUPS || '/Volumes/MacData/0
 const SSH_KEY = process.env.SUB2API_SYNC_SSH_KEY || path.join(HOME, '.ssh/id_ed25519_lab')
 const SERVER_HOST = process.env.SUB2API_SYNC_HOST || '104.36.67.199'
 const SERVER_USER = process.env.SUB2API_SYNC_USER || 'root'
-const SERVER_API = 'http://127.0.0.1:8080/api/v1'
+const SERVER_DEPLOY_DIR = process.env.SUB2API_SYNC_DEPLOY_DIR || '/opt/sub2api/deploy'
+const SERVER_STATE_PATH = path.posix.join(SERVER_DEPLOY_DIR, '.blue-green-active')
 const ACCOUNT_PAGE_SIZE = 200
 const MAX_ACCOUNT_PAGES = 100
 const DEFAULT_ACCOUNT_CONCURRENCY = 10
@@ -260,22 +261,42 @@ function remoteRequest(apiPath, method = 'GET', input = '', run = spawnSync) {
   const passRemainingMs = SYNC_PASS_TIMEOUT_MS - (Date.now() - SYNC_PASS_STARTED_AT)
   if (passRemainingMs <= 0) fail(`sync pass timed out after ${SYNC_PASS_TIMEOUT_MS}ms`)
   const requestTimeoutMs = Math.min(REMOTE_REQUEST_TIMEOUT_MS, passRemainingMs)
-  const url = `${SERVER_API}${apiPath}`
   const curlTimeoutArgs = `--connect-timeout 5 --max-time ${REMOTE_CURL_TIMEOUT_SECONDS}`
   const remoteScript = [
     'set -eu',
-    'envs="$(docker inspect sub2api --format "{{range .Config.Env}}{{println .}}{{end}}")"',
+    `state_file=${shellQuote(SERVER_STATE_PATH)}`,
+    'container=sub2api',
+    'port=8080',
+    'if [ -r "$state_file" ]; then',
+    '  container="$(sed -n "s/^active_container=//p" "$state_file")"',
+    '  port="$(sed -n "s/^active_port=//p" "$state_file")"',
+    '  test -n "$container" && test -n "$port"',
+    'fi',
+    'case "$container" in',
+    '  sub2api|sub2api-blue|sub2api-green) ;;',
+    '  *) exit 1 ;;',
+    'esac',
+    'case "$port" in',
+    '  *[!0-9]*|"") exit 1 ;;',
+    'esac',
+    'runtime_status="$(docker inspect "$container" --format "{{.State.Status}}")"',
+    'runtime_health="$(docker inspect "$container" --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}")"',
+    'test "$runtime_status" = running',
+    'test "$runtime_health" = healthy || test "$runtime_health" = none',
+    'envs="$(docker inspect "$container" --format "{{range .Config.Env}}{{println .}}{{end}}")"',
     'email="$(printf "%s\\n" "$envs" | sed -n "s/^ADMIN_EMAIL=//p")"',
     'password="$(printf "%s\\n" "$envs" | sed -n "s/^ADMIN_PASSWORD=//p")"',
     'body="$(printf "{\\"email\\":\\"%s\\",\\"password\\":\\"%s\\"}" "$email" "$password")"',
-    `login="$(curl -fsS ${curlTimeoutArgs} -H "Content-Type: application/json" --data "$body" http://127.0.0.1:8080/api/v1/auth/login)"`,
+    'base_url="http://127.0.0.1:${port}/api/v1"',
+    `login="$(curl -fsS ${curlTimeoutArgs} -H "Content-Type: application/json" --data "$body" "$base_url/auth/login)"`,
     'jwt="$(printf "%s" "$login" | sed -n "s/.*\\"access_token\\":\\"\\([^\\"]*\\)\\".*/\\1/p")"',
     'test -n "$jwt"',
     `payload="$(cat)"`,
+    `endpoint="$(printf "%s%s" "$base_url" ${shellQuote(apiPath)})"`,
     `if [ ${shellQuote(method)} = POST ]; then`,
-    `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" ${shellQuote(url)})"`,
+    '  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" "$endpoint")"',
     'else',
-    `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" ${shellQuote(url)})"`,
+    '  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" "$endpoint")"',
     'fi',
     'printf "%s" "$response"',
   ].join('\n')

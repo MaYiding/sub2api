@@ -29,6 +29,10 @@ node tools/cockpit-token-sync/sync.js
 
 The script authenticates to the private container API over the existing SSH key. The Sub2API administrator password is read only on the server from the container environment and is not stored on the Mac.
 
+When the server uses blue-green deployment, each SSH request resolves the
+active container and loopback port from `/opt/sub2api/deploy/.blue-green-active`
+before logging in. The LaunchAgent does not need to change when ports alternate.
+
 ## LaunchAgent
 
 Run `tools/cockpit-token-sync/install-macos.sh` from the checkout. It installs a small wrapper on the internal disk because macOS may reject LaunchAgent scripts and log paths located directly on an external volume. Launchd starts one bounded sync pass every 30 seconds and never overlaps it with another pass; the process exits after every pass so memory and child processes cannot accumulate indefinitely.
