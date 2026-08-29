@@ -6,12 +6,16 @@ const {
   credentialDirection,
   credentialMetadataSnapshot,
   credentialsFromLocal,
+  createServerAccount,
   hasServerRateLimitState,
+  listServerAccounts,
   mergeServerCredentials,
   openAIQuotaIsAvailable,
+  recoverServerRuntimeState,
   remoteRequest,
   sameCredentialFields,
   sameCredentialMetadata,
+  serverAccountCreatePayload,
   serverCredentialsChanged,
   syncCredentialDirection,
 } = require('./sync.js')
@@ -109,8 +113,78 @@ test('recognizes available upstream quota and server runtime limit state', () =>
 
   assert.equal(hasServerRateLimitState({ rate_limit_reset_at: '2026-08-26T00:00:00Z' }), true)
   assert.equal(hasServerRateLimitState({ temp_unschedulable_until: '2026-08-26T00:00:00Z' }), true)
+  assert.equal(hasServerRateLimitState({ status: 'error' }), true)
+  assert.equal(hasServerRateLimitState({ status: 'active', schedulable: false }), true)
+  assert.equal(hasServerRateLimitState({ status: 'active', schedulable: true }), false)
   assert.equal(hasServerRateLimitState({ extra: { model_rate_limits: { 'gpt-5': {} } } }), false)
   assert.equal(hasServerRateLimitState({}), false)
+})
+
+test('paginates the server account list until the final partial page', () => {
+  const requests = []
+  const firstPage = Array.from({ length: 200 }, (_, index) => ({ id: index + 1 }))
+  const accounts = listServerAccounts((path) => {
+    requests.push(path)
+    const page = new URL(`http://sync.test${path}`).searchParams.get('page')
+    return { data: { items: page === '1' ? firstPage : [{ id: 201 }] } }
+  })
+
+  assert.equal(accounts.length, 201)
+  assert.deepEqual(requests, [
+    '/admin/accounts?page=1&page_size=200',
+    '/admin/accounts?page=2&page_size=200',
+  ])
+})
+
+test('builds a complete server OAuth account payload from local credentials', () => {
+  const local = localAccount()
+  const normalizedLocal = { ...local, credentials: credentialsFromLocal(local) }
+  const payload = serverAccountCreatePayload(normalizedLocal, 456)
+
+  assert.deepEqual(payload, {
+    name: normalizedLocal.email,
+    platform: 'openai',
+    type: 'oauth',
+    credentials: {
+      ...normalizedLocal.credentials,
+      _token_version: 456,
+    },
+    extra: {},
+    concurrency: 10,
+    priority: 2,
+    rate_multiplier: 1,
+  })
+})
+
+test('creates a missing server account with the OAuth payload', () => {
+  const local = localAccount()
+  const normalizedLocal = { ...local, credentials: credentialsFromLocal(local) }
+  let captured
+  const id = createServerAccount(normalizedLocal, (path, method, body) => {
+    captured = { path, method, payload: JSON.parse(body) }
+    return { data: { id: 73 } }
+  })
+
+  assert.equal(id, 73)
+  assert.equal(captured.path, '/admin/accounts')
+  assert.equal(captured.method, 'POST')
+  assert.equal(captured.payload.name, normalizedLocal.email)
+  assert.equal(captured.payload.credentials.access_token, normalizedLocal.credentials.access_token)
+})
+
+test('uses the server runtime recovery endpoint without touching credentials', () => {
+  let captured
+  const result = recoverServerRuntimeState(42, (path, method, body) => {
+    captured = { path, method, body }
+    return { data: { recovered: true } }
+  })
+
+  assert.deepEqual(captured, {
+    path: '/admin/accounts/42/recover-state',
+    method: 'POST',
+    body: '{}',
+  })
+  assert.deepEqual(result, { recovered: true })
 })
 
 test('resolves divergent credentials by access-token issue time', () => {
