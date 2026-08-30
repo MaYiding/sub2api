@@ -45,6 +45,11 @@ class AutoRechargeRuntimeTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not healthy"):
                     MODULE.load_runtime()
 
+    def test_all_active_roles_are_eligible_but_inactive_users_are_not(self):
+        self.assertTrue(MODULE.eligible_for_recharge({"role": "user", "status": "active"}))
+        self.assertTrue(MODULE.eligible_for_recharge({"role": "admin", "status": "active"}))
+        self.assertFalse(MODULE.eligible_for_recharge({"role": "user", "status": "disabled"}))
+
 
 if __name__ == "__main__":
     unittest.main()
