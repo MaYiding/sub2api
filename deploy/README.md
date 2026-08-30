@@ -62,7 +62,8 @@ production host and never uses `docker compose down`.
 The automatic recharge service must run the source-managed
 `sub2api-auto-recharge.py`. It reads `deploy/.blue-green-active` and uses the
 active container and loopback port, so a blue-green cutover does not silently
-disable scheduled balance checks.
+disable scheduled balance checks. It considers every active account, including
+administrators, when applying the low-balance threshold.
 
 ---
 

@@ -129,6 +129,10 @@ def unwrap(response):
     return response.get("data", response)
 
 
+def eligible_for_recharge(user):
+    return user.get("status") == "active"
+
+
 def login(base_url, container):
     email, password = load_admin_credentials(container)
     response = request_json(
@@ -176,7 +180,7 @@ def main():
     errors = 0
 
     for user in users:
-        if user.get("role") != "user" or user.get("status") != "active":
+        if not eligible_for_recharge(user):
             continue
         try:
             balance = float(user.get("balance"))
