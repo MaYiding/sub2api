@@ -1,5 +1,38 @@
 # Error Log
 
+## [ERR-20260830-001] hardcoded-date-command-path
+
+**Logged**: 2026-08-30T11:02:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A read-only automation inspection assumed `date` lived at `/usr/bin/date`, but this macOS host exposes it at `/bin/date`.
+
+### Error
+```
+zsh:2: no such file or directory: /usr/bin/date
+```
+
+### Context
+- The command was gathering the current run timestamp alongside Git diagnostics.
+- All repository reads in the same command completed; no repository or remote state changed.
+
+### Suggested Fix
+Resolve standard utilities through `command -v` or invoke `date` through `PATH` instead of hardcoding `/usr/bin/date`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-30T11:02:19+08:00
+- **Commit/PR**: pending dev maintenance PR
+- **Notes**: Confirmed `date` resolves to `/bin/date` and continued with the portable command name.
+
+---
+
 ## [ERR-20260829-001] git-push-github-https-reset
 
 **Logged**: 2026-08-29T11:22:41+08:00
@@ -22,17 +55,20 @@ pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be 
 - The repository had previously recovered from the same GitHub HTTPS reset by pushing over SSH port 22.
 
 ### Suggested Fix
-Retry the same non-force push over SSH port 22, then create the PR only after confirming the remote branch exists.
+Retry with an explicit SSH repository URL and exact refspec, then create the PR only after confirming the remote branch exists. A one-shot `remote.<name>.url` config override did not bypass the configured HTTPS URL on this host.
 
 ### Metadata
 - Reproducible: intermittent
 - Related Files: none
 - See Also: ERR-20260823-001
+- Recurrence-Count: 2
+- First-Seen: 2026-08-29
+- Last-Seen: 2026-08-30
 
 ### Resolution
 - **Resolved**: 2026-08-29T11:23:26+08:00
 - **Commit/PR**: current dev-sync PR
-- **Notes**: The same commit pushed successfully over SSH port 22; the remote branch was confirmed before retrying PR creation.
+- **Notes**: The same commit pushed successfully over SSH port 22; the remote branch was confirmed before retrying PR creation. On 2026-08-30, both origin and upstream HTTPS fetches reset again; explicit SSH URLs with exact refspecs refreshed both tracking branches without changing configured remote URLs.
 
 ---
 
