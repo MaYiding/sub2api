@@ -1,5 +1,38 @@
 # Error Log
 
+## [ERR-20260830-002] conflict-marker-scan-false-positive
+
+**Logged**: 2026-08-30T11:07:19+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A broad conflict-marker scan treated a legitimate source string made of equals signs as an unresolved Git conflict marker.
+
+### Error
+```
+backend/internal/pkg/antigravity/request_transformer.go:274:===========================================`
+```
+
+### Context
+- The scan used `^(<<<<<<<|=======|>>>>>>>)`, which also matches longer separator strings.
+- `git diff --check` passed, the merge was clean, and the source line was unrelated to the upstream changes.
+
+### Suggested Fix
+Match the full Git marker shape: `^<<<<<<< .+`, exactly seven equals signs, or `^>>>>>>> .+`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/internal/pkg/antigravity/request_transformer.go
+
+### Resolution
+- **Resolved**: 2026-08-30T11:07:36+08:00
+- **Commit/PR**: pending dev sync PR
+- **Notes**: Re-ran the strict marker scan successfully and confirmed upstream is an ancestor of the sync branch.
+
+---
+
 ## [ERR-20260830-001] hardcoded-date-command-path
 
 **Logged**: 2026-08-30T11:02:19+08:00
@@ -305,11 +338,14 @@ Use `find`/`rg --files` to enumerate optional files, or enable a null-glob local
 ### Metadata
 - Reproducible: yes
 - Related Files: deploy/docker-compose.dev.yml, deploy/docker-compose.local.yml
+- Recurrence-Count: 2
+- First-Seen: 2026-08-26
+- Last-Seen: 2026-08-30
 
 ### Resolution
 - **Resolved**: 2026-08-26T07:33:00Z
 - **Commit/PR**: pending sync PR
-- **Notes**: Continued discovery with `find`-resolved paths and avoided optional shell globs.
+- **Notes**: Continued discovery with `find`-resolved paths and avoided optional shell globs. The same root-level Compose glob recurred on 2026-08-30; subsequent scans enumerate candidate files with `rg --files` or `find` first.
 
 ---
 
@@ -338,14 +374,14 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 10
-- Last-Seen: 2026-08-28
+- Recurrence-Count: 11
+- Last-Seen: 2026-08-30
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. On 2026-08-30, explicit SSH repository URLs and exact refspecs refreshed origin and upstream after HTTPS resets. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
 
 ---
 
