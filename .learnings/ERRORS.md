@@ -1,5 +1,38 @@
 # Error Log
 
+## [ERR-20260830-003] apply-patch-ambiguous-context
+
+**Logged**: 2026-08-30T11:36:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A patch used a generic Metadata block as context and added recurrence fields to the wrong error entry.
+
+### Error
+```
+The recurrence fields appeared under ERR-20260830-001 instead of ERR-20260824-009.
+```
+
+### Context
+- Many entries in `.learnings/ERRORS.md` contain identical `Reproducible` and `Related Files` lines.
+- The post-patch diff exposed the misplaced fields before any commit or push.
+
+### Suggested Fix
+Anchor patches for repetitive Markdown logs with the unique entry heading as well as the local field context.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-08-30T11:36:00+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Removed the fields from the date-path entry and applied them under the uniquely anchored apply-patch entry.
+
+---
+
 ## [ERR-20260830-002] conflict-marker-scan-false-positive
 
 **Logged**: 2026-08-30T11:07:19+08:00
@@ -954,10 +987,13 @@ Use one `Update File` operation when replacing an existing file's contents.
 ### Metadata
 - Reproducible: yes
 - Related Files: none
+- Recurrence-Count: 3
+- First-Seen: 2026-08-24
+- Last-Seen: 2026-08-30
 
 ### Resolution
 - **Resolved**: 2026-08-24T05:56:00Z
 - **Commit/PR**: local diagnostic correction
-- **Notes**: Replaced the delete/add pair with one update operation.
+- **Notes**: Replaced the delete/add pair with one update operation. The same pattern recurred during the 2026-08-29 and 2026-08-30 automation-memory updates; both failed atomically and were corrected with a single update operation. The prevention rule is also retained in automation memory.
 
 ---
