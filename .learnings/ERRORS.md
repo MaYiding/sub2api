@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260831-001] git-rev-parse-verify-multiple-revisions
+
+**Logged**: 2026-08-31T11:04:12+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A branch-topology diagnostic passed multiple revisions to `git rev-parse --verify`, which accepts exactly one revision.
+
+### Error
+```
+fatal: Needed a single revision
+```
+
+### Context
+- The read-only command tried to verify `origin/main`, `origin/dev`, and `upstream/main` in one invocation.
+- Later commands in the same diagnostic continued, but the first ancestry result was invalid because it inherited the failed command's exit status.
+- No repository or remote state changed.
+
+### Suggested Fix
+Resolve each revision with a separate `git rev-parse` invocation before running ancestry checks.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-08-31T11:04:12+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Re-ran each revision lookup separately and confirmed that both fork branches contain `upstream/main`, while `dev` also contains fork `main`.
+
+---
+
 ## [ERR-20260830-003] apply-patch-ambiguous-context
 
 **Logged**: 2026-08-30T11:36:00+08:00
@@ -407,14 +441,14 @@ When GitHub HTTPS is reset but SSH authentication succeeds, rewrite the GitHub U
 
 ### Metadata
 - Reproducible: yes
-- Recurrence-Count: 11
-- Last-Seen: 2026-08-30
+- Recurrence-Count: 12
+- Last-Seen: 2026-08-31
 - Related Files: none
 
 ### Resolution
 - **Resolved**: 2026-08-23T03:08:00Z
 - **Commit/PR**: #57
-- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. On 2026-08-30, explicit SSH repository URLs and exact refspecs refreshed origin and upstream after HTTPS resets. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
+- **Notes**: GitHub SSH authentication succeeded on ports 22 and 443; the 2026-08-24 through 2026-08-28 sync pushes/fetches and branch cleanup used a command-scoped `url.insteadOf` rewrite without changing the persistent remote. On 2026-08-30 and 2026-08-31, explicit SSH repository URLs and exact refspecs refreshed origin and upstream after HTTPS resets. GraphQL polling and one SSH push have also hit transient connection resets; retrying continues safely without changing repository state.
 
 ---
 
