@@ -1,5 +1,34 @@
 # Error Log
 
+## [ERR-20260901-001] pnpm-non-tty-modules-rebuild
+
+**Logged**: 2026-09-01T11:05:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: frontend
+
+### Summary
+The root frontend build could not start because pnpm attempted to rebuild `node_modules` in a non-interactive shell.
+
+### Error
+```
+[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules directory due to no TTY
+```
+
+### Context
+- Ran `make build` after merging the latest upstream `main`.
+- Backend compilation completed successfully; the frontend target's implicit `pnpm install` was blocked before Vite/Vue compilation.
+
+### Suggested Fix
+Run `CI=true pnpm install --frozen-lockfile` explicitly (or invoke the repository-pinned pnpm version) before non-interactive frontend validation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json, frontend/pnpm-lock.yaml
+- See Also: ERR-20260825-001
+
+---
+
 ## [ERR-20260828-002] stale-duplicate-delete-batch
 
 **Logged**: 2026-08-28T16:24:27+08:00
