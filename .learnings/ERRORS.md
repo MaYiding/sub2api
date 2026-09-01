@@ -4,7 +4,7 @@
 
 **Logged**: 2026-09-01T11:05:00+08:00
 **Priority**: low
-**Status**: pending
+**Status**: resolved
 **Area**: frontend
 
 ### Summary
@@ -26,6 +26,11 @@ Run `CI=true pnpm install --frozen-lockfile` explicitly (or invoke the repositor
 - Reproducible: yes
 - Related Files: frontend/package.json, frontend/pnpm-lock.yaml
 - See Also: ERR-20260825-001
+
+### Resolution
+- **Resolved**: 2026-09-01T11:12:00+08:00
+- **Commit/PR**: #79 validation
+- **Notes**: Ran `CI=true npx pnpm@9.15.9 --dir frontend install --frozen-lockfile`, then the frontend production build completed successfully.
 
 ---
 
