@@ -34,6 +34,42 @@ Read port defaults from the managed development script or print only configurati
 
 ---
 
+## [ERR-20260902-003] concurrent-pnpm-dependency-refresh
+
+**Logged**: 2026-09-02T11:52:18+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Two local pnpm validation commands started concurrently and exposed that the system pnpm version could not safely refresh this repository's dependency tree.
+
+### Error
+```
+ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY
+ERR_PNPM_LOCKFILE_CONFIG_MISMATCH
+```
+
+### Context
+- Lint/typecheck and targeted-test/build validation were launched in parallel against the same frontend workspace.
+- The branch switch left pnpm wanting to refresh `node_modules`; concurrent processes cannot safely own that operation.
+- The installed pnpm 11 no longer reads `pnpm.overrides` from `package.json`, while this lockfile was generated with those overrides under pnpm 9.
+- Repository integrity checks completed successfully and no source files were changed by the failed commands.
+
+### Suggested Fix
+Run validation sequentially when commands share one `node_modules` tree, and use pnpm 9 for frozen dependency restoration until the repository migrates its overrides configuration.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json, frontend/pnpm-lock.yaml
+
+### Resolution
+- **Resolved**: 2026-09-02T11:52:18+08:00
+- **Commit/PR**: pending dev synchronization PR
+- **Notes**: Restored dependencies with `pnpm@9.15.9 --frozen-lockfile`, then re-ran frontend validation sequentially.
+
+---
+
 ## [ERR-20260902-001] git-rm-ignored-residual-file
 
 **Logged**: 2026-09-02T11:20:00+08:00
