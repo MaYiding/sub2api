@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260902-001] git-rm-ignored-residual-file
+
+**Logged**: 2026-09-02T11:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+`git rm` could not delete a `.DS_Store` file that an upstream merge had already removed from the index but left on disk as an ignored residual file.
+
+### Error
+```
+fatal: pathspec '.DS_Store' did not match any files
+```
+
+### Context
+- The pre-merge branch tracked the root `.DS_Store`, while upstream had already deleted it.
+- The merge adopted the index deletion, but the ignored working-tree file remained physically present.
+- A clean `git status` therefore did not imply that the ignored file was absent.
+
+### Suggested Fix
+Check both `git ls-files --error-unmatch <path>` and filesystem presence before choosing `git rm` versus ordinary ignored-file cleanup.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .DS_Store, .gitignore
+
+### Resolution
+- **Resolved**: 2026-09-02T11:20:00+08:00
+- **Commit/PR**: current upstream-sync PR
+- **Notes**: Reclassified the residual as ignored local garbage and removed it with an ordinary filesystem deletion.
+
+---
+
 ## [ERR-20260901-001] pnpm-non-tty-modules-rebuild
 
 **Logged**: 2026-09-01T11:05:00+08:00
