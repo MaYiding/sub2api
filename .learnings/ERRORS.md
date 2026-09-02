@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260902-002] local-env-secret-output
+
+**Logged**: 2026-09-02T11:28:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A port-discovery command searched local `.env` files without redacting values and printed a development database credential into tool output.
+
+### Error
+```
+deploy/.env:<line>:POSTGRES_PASSWORD=<redacted>
+```
+
+### Context
+- The goal was only to confirm the backend/frontend and infrastructure ports before restarting services.
+- The command included `deploy/.env` in an `rg` search for several configuration keys.
+- The credential remained local to this task output and was not added to Git or sent to an external service.
+
+### Suggested Fix
+Read port defaults from the managed development script or print only configuration key names; never search or display `.env` values during diagnostics.
+
+### Metadata
+- Reproducible: yes
+- Related Files: deploy/.env, tools/sub2api-dev.sh
+
+### Resolution
+- **Resolved**: 2026-09-02T11:28:00+08:00
+- **Commit/PR**: current main-to-dev sync PR
+- **Notes**: Stopped inspecting `.env` values and retained only the script-declared port information for the remaining checks.
+
+---
+
 ## [ERR-20260902-001] git-rm-ignored-residual-file
 
 **Logged**: 2026-09-02T11:20:00+08:00
