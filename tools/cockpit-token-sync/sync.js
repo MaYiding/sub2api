@@ -21,6 +21,7 @@ const ACCOUNT_PAGE_SIZE = 200
 const MAX_ACCOUNT_PAGES = 100
 const DEFAULT_ACCOUNT_CONCURRENCY = 10
 const DEFAULT_ACCOUNT_PRIORITY = 2
+const SYNC_GROUP_NAME = process.env.SUB2API_SYNC_GROUP_NAME || '晴天纪'
 const RATE_LIMIT_PROBE_INTERVAL_MS = 60 * 1000
 const REMOTE_REQUEST_TIMEOUT_MS = positiveIntegerEnv('SUB2API_SYNC_REQUEST_TIMEOUT_MS', 40 * 1000)
 const REMOTE_CURL_TIMEOUT_SECONDS = positiveIntegerEnv('SUB2API_SYNC_CURL_TIMEOUT_SECONDS', 15)
@@ -293,10 +294,10 @@ function remoteRequest(apiPath, method = 'GET', input = '', run = spawnSync) {
     'test -n "$jwt"',
     `payload="$(cat)"`,
     `endpoint="$(printf "%s%s" "$base_url" ${shellQuote(apiPath)})"`,
-    `if [ ${shellQuote(method)} = POST ]; then`,
-    `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" "$endpoint")"`,
-    'else',
+    `if [ ${shellQuote(method)} = GET ]; then`,
     `  response="$(curl -fsS ${curlTimeoutArgs} -H "Authorization: Bearer $jwt" "$endpoint")"`,
+    'else',
+    `  response="$(curl -fsS ${curlTimeoutArgs} -X ${shellQuote(method)} -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" --data-binary "$payload" "$endpoint")"`,
     'fi',
     'printf "%s" "$response"',
   ].join('\n')
@@ -347,6 +348,31 @@ function listServerAccounts(request = remoteRequest) {
   fail(`server account pagination exceeded ${MAX_ACCOUNT_PAGES} pages`)
 }
 
+function listServerGroups(request = remoteRequest) {
+  const groups = []
+  for (let page = 1; page <= MAX_ACCOUNT_PAGES; page++) {
+    const response = request(`/admin/groups?page=${page}&page_size=${ACCOUNT_PAGE_SIZE}`)
+    const payload = unwrap(response)
+    const items = Array.isArray(payload && payload.items) ? payload.items : []
+    groups.push(...items)
+    if (items.length < ACCOUNT_PAGE_SIZE) return groups
+  }
+  fail(`server group pagination exceeded ${MAX_ACCOUNT_PAGES} pages`)
+}
+
+function resolveSyncGroup(request = remoteRequest) {
+  const group = listServerGroups(request).find(candidate =>
+    candidate.name === SYNC_GROUP_NAME &&
+    candidate.platform === 'openai' &&
+    candidate.status === 'active',
+  )
+  const id = Number(group && group.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    fail(`active OpenAI group ${JSON.stringify(SYNC_GROUP_NAME)} was not found on server`)
+  }
+  return { id, name: group.name }
+}
+
 function exportServerAccounts(ids = []) {
   const query = ids.length > 0
     ? `ids=${ids.join(',')}&include_proxies=false`
@@ -369,7 +395,8 @@ function applyServerCredentials(id, credentials, serverAccount = null) {
   return { ...(serverAccount || {}), credentials: mergedCredentials }
 }
 
-function serverAccountCreatePayload(local, tokenVersion = Date.now()) {
+function serverAccountCreatePayload(local, groupID, tokenVersion = Date.now()) {
+  if (!Number.isInteger(groupID) || groupID <= 0) fail('server group id must be a positive integer')
   return {
     name: local.email,
     platform: 'openai',
@@ -379,14 +406,15 @@ function serverAccountCreatePayload(local, tokenVersion = Date.now()) {
     concurrency: DEFAULT_ACCOUNT_CONCURRENCY,
     priority: DEFAULT_ACCOUNT_PRIORITY,
     rate_multiplier: 1,
+    group_ids: [groupID],
   }
 }
 
-function createServerAccount(local, request = remoteRequest) {
+function createServerAccount(local, groupID, request = remoteRequest) {
   const response = request(
     '/admin/accounts',
     'POST',
-    JSON.stringify(serverAccountCreatePayload(local)),
+    JSON.stringify(serverAccountCreatePayload(local, groupID)),
   )
   if (response && response.code !== undefined && response.code !== 0) {
     fail(`server rejected account creation for ${local.email}`)
@@ -397,6 +425,24 @@ function createServerAccount(local, request = remoteRequest) {
     fail(`server account creation returned no account id for ${local.email}`)
   }
   return id
+}
+
+function addServerAccountToGroup(id, existingGroupIDs, groupID, request = remoteRequest) {
+  if (!Number.isInteger(groupID) || groupID <= 0) fail('server group id must be a positive integer')
+  if (Array.isArray(existingGroupIDs) && existingGroupIDs.includes(groupID)) return false
+  const groupIDs = [...new Set([
+    ...(Array.isArray(existingGroupIDs) ? existingGroupIDs : []),
+    groupID,
+  ].filter(candidate => Number.isInteger(candidate) && candidate > 0))].sort((left, right) => left - right)
+  const response = request(
+    `/admin/accounts/${encodeURIComponent(id)}`,
+    'PUT',
+    JSON.stringify({ group_ids: groupIDs }),
+  )
+  if (response && response.code !== undefined && response.code !== 0) {
+    fail(`server rejected group assignment for account ${id}`)
+  }
+  return true
 }
 
 function recoverServerRuntimeState(id, request = remoteRequest) {
@@ -575,6 +621,27 @@ function reconcileServerRateLimits(serverMetas, localByEmail, state) {
   return changed
 }
 
+function reconcileServerGroupMembership(serverMetas, localByEmail, group) {
+  let changed = false
+  for (const serverMeta of serverMetas) {
+    const email = serverMeta.name
+    if (!localByEmail.has(email) || (Array.isArray(serverMeta.group_ids) && serverMeta.group_ids.includes(group.id))) continue
+    if (dryRun) {
+      log(`would add ${email} to ${group.name}`)
+      continue
+    }
+    try {
+      if (addServerAccountToGroup(serverMeta.id, serverMeta.group_ids, group.id)) {
+        changed = true
+        log(`added ${email} to ${group.name}`)
+      }
+    } catch (error) {
+      log(`group assignment skipped ${email}: ${error instanceof Error ? error.message : 'assignment failed'}`)
+    }
+  }
+  return changed
+}
+
 function main() {
   const serverMetas = listServerAccounts()
     .filter(account => account.platform === 'openai' && account.type === 'oauth' && account.name)
@@ -583,6 +650,13 @@ function main() {
   const state = readState()
   let exportsCache = null
   let changed = false
+  let syncGroup = null
+
+  try {
+    syncGroup = resolveSyncGroup()
+  } catch (error) {
+    log(`group assignment unavailable: ${error instanceof Error ? error.message : 'group lookup failed'}`)
+  }
 
   const getExport = (ids = []) => {
     if (ids.length === 0) {
@@ -595,10 +669,14 @@ function main() {
   for (const [email, local] of localByEmail) {
     const serverMeta = serverByEmail.get(email)
     if (!serverMeta) {
+      if (!syncGroup) {
+        log(`blocked ${email}: required server group ${JSON.stringify(SYNC_GROUP_NAME)} is unavailable`)
+        continue
+      }
       if (dryRun) {
-        log(`would create ${email}: local OAuth account is missing on server`)
+        log(`would create ${email}: local OAuth account -> ${syncGroup.name}`)
       } else {
-        const serverId = createServerAccount(local)
+        const serverId = createServerAccount(local, syncGroup.id)
         const refreshedMeta = listServerAccounts().find(account => account.id === serverId)
         if (!refreshedMeta) fail(`created server account ${serverId} for ${email} was not found after creation`)
         const serverAccount = getExport([serverId]).find(account => account.name === email)
@@ -742,6 +820,7 @@ function main() {
     }
   }
 
+  if (syncGroup && reconcileServerGroupMembership(serverMetas, localByEmail, syncGroup)) changed = true
   if (reconcileServerRateLimits(serverMetas, localByEmail, state)) changed = true
 
   if (!dryRun && changed) saveState(state)
@@ -766,13 +845,16 @@ module.exports = {
   credentialsFromServer,
   mergeServerCredentials,
   hasServerRateLimitState,
+  addServerAccountToGroup,
   listServerAccounts,
+  listServerGroups,
   openAIQuotaIsAvailable,
   remoteRequest,
   sameCredentialFields,
   sameCredentialMetadata,
   sameTokens,
   serverAccountCreatePayload,
+  resolveSyncGroup,
   serverCredentialVersion,
   serverCredentialsChanged,
   recoverServerRuntimeState,

@@ -6,9 +6,11 @@ const {
   credentialDirection,
   credentialMetadataSnapshot,
   credentialsFromLocal,
+  addServerAccountToGroup,
   createServerAccount,
   hasServerRateLimitState,
   listServerAccounts,
+  listServerGroups,
   mergeServerCredentials,
   openAIQuotaIsAvailable,
   recoverServerRuntimeState,
@@ -17,6 +19,7 @@ const {
   sameCredentialMetadata,
   serverAccountCreatePayload,
   serverCredentialsChanged,
+  resolveSyncGroup,
   syncCredentialDirection,
 } = require('./sync.js')
 
@@ -136,10 +139,29 @@ test('paginates the server account list until the final partial page', () => {
   ])
 })
 
+test('resolves the active OpenAI sync group by exact name', () => {
+  const group = resolveSyncGroup(() => ({ data: { items: [
+    { id: 7, name: '晴天纪', platform: 'openai', status: 'inactive' },
+    { id: 2, name: '晴天纪', platform: 'openai', status: 'active' },
+  ] } }))
+
+  assert.deepEqual(group, { id: 2, name: '晴天纪' })
+})
+
+test('paginates the server group list until the final partial page', () => {
+  const firstPage = Array.from({ length: 200 }, (_, index) => ({ id: index + 1 }))
+  const groups = listServerGroups((path) => {
+    const page = new URL(`http://sync.test${path}`).searchParams.get('page')
+    return { data: { items: page === '1' ? firstPage : [{ id: 201 }] } }
+  })
+
+  assert.equal(groups.length, 201)
+})
+
 test('builds a complete server OAuth account payload from local credentials', () => {
   const local = localAccount()
   const normalizedLocal = { ...local, credentials: credentialsFromLocal(local) }
-  const payload = serverAccountCreatePayload(normalizedLocal, 456)
+  const payload = serverAccountCreatePayload(normalizedLocal, 2, 456)
 
   assert.deepEqual(payload, {
     name: normalizedLocal.email,
@@ -153,6 +175,7 @@ test('builds a complete server OAuth account payload from local credentials', ()
     concurrency: 10,
     priority: 2,
     rate_multiplier: 1,
+    group_ids: [2],
   })
 })
 
@@ -160,7 +183,7 @@ test('creates a missing server account with the OAuth payload', () => {
   const local = localAccount()
   const normalizedLocal = { ...local, credentials: credentialsFromLocal(local) }
   let captured
-  const id = createServerAccount(normalizedLocal, (path, method, body) => {
+  const id = createServerAccount(normalizedLocal, 2, (path, method, body) => {
     captured = { path, method, payload: JSON.parse(body) }
     return { data: { id: 73 } }
   })
@@ -170,6 +193,25 @@ test('creates a missing server account with the OAuth payload', () => {
   assert.equal(captured.method, 'POST')
   assert.equal(captured.payload.name, normalizedLocal.email)
   assert.equal(captured.payload.credentials.access_token, normalizedLocal.credentials.access_token)
+  assert.deepEqual(captured.payload.group_ids, [2])
+})
+
+test('adds the sync group without replacing existing group memberships', () => {
+  let captured
+  const changed = addServerAccountToGroup(73, [5, 9], 2, (path, method, body) => {
+    captured = { path, method, payload: JSON.parse(body) }
+    return { data: { id: 73 } }
+  })
+
+  assert.equal(changed, true)
+  assert.deepEqual(captured, {
+    path: '/admin/accounts/73',
+    method: 'PUT',
+    payload: { group_ids: [2, 5, 9] },
+  })
+  assert.equal(addServerAccountToGroup(73, [2, 5], 2, () => {
+    throw new Error('already assigned group must not update the server')
+  }), false)
 })
 
 test('uses the server runtime recovery endpoint without touching credentials', () => {
@@ -240,6 +282,17 @@ test('bounds every remote request with SSH and process timeouts', () => {
     stdout: '',
     error: Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
   })), /timed out/)
+})
+
+test('sends non-GET remote requests with their explicit HTTP verb', () => {
+  let remoteScript
+  remoteRequest('/admin/accounts/73', 'PUT', '{}', (_command, args) => {
+    remoteScript = args.at(-1)
+    return { status: 0, stdout: '{}' }
+  })
+
+  assert.match(remoteScript, /-X 'PUT'/)
+  assert.match(remoteScript, /--data-binary "\$payload"/)
 })
 
 test('resolves the active blue-green container and port on the server', () => {
