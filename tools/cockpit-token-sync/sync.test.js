@@ -3,6 +3,7 @@ const test = require('node:test')
 
 const {
   accessTokenIssuedAt,
+  applyServerCredentials,
   credentialDirection,
   credentialMetadataSnapshot,
   credentialsFromLocal,
@@ -20,6 +21,7 @@ const {
   serverAccountCreatePayload,
   serverCredentialsChanged,
   resolveSyncGroup,
+  syncOptions,
   syncCredentialDirection,
 } = require('./sync.js')
 
@@ -117,10 +119,38 @@ test('recognizes available upstream quota and server runtime limit state', () =>
   assert.equal(hasServerRateLimitState({ rate_limit_reset_at: '2026-08-26T00:00:00Z' }), true)
   assert.equal(hasServerRateLimitState({ temp_unschedulable_until: '2026-08-26T00:00:00Z' }), true)
   assert.equal(hasServerRateLimitState({ status: 'error' }), true)
-  assert.equal(hasServerRateLimitState({ status: 'active', schedulable: false }), true)
+  assert.equal(hasServerRateLimitState({ status: 'active', schedulable: false }), false)
+  assert.equal(hasServerRateLimitState({ status: 'error', schedulable: false }), false)
   assert.equal(hasServerRateLimitState({ status: 'active', schedulable: true }), false)
   assert.equal(hasServerRateLimitState({ extra: { model_rate_limits: { 'gpt-5': {} } } }), false)
   assert.equal(hasServerRateLimitState({}), false)
+})
+
+test('only imports missing accounts when explicitly requested', () => {
+  assert.deepEqual(syncOptions([]), { dryRun: false, importMissingAccounts: false })
+  assert.deepEqual(syncOptions(['--dry-run']), { dryRun: true, importMissingAccounts: false })
+  assert.deepEqual(syncOptions(['--import-missing']), { dryRun: false, importMissingAccounts: true })
+})
+
+test('preserves a manually unschedulable account while updating credentials', () => {
+  const local = localAccount()
+  const credentials = credentialsFromLocal(local)
+  let captured
+  applyServerCredentials(73, credentials, { credentials: { client_id: 'server-client-id' } }, {
+    preserveScheduling: true,
+    request: (path, method, body) => {
+      captured = { path, method, payload: JSON.parse(body) }
+      return { data: { id: 73 } }
+    },
+  })
+
+  assert.equal(captured.path, '/admin/accounts/73')
+  assert.equal(captured.method, 'PUT')
+  assert.equal(captured.payload.credentials.client_id, 'server-client-id')
+  assert.equal(captured.payload.credentials.access_token, credentials.access_token)
+  assert.equal(captured.payload.credentials.refresh_token, credentials.refresh_token)
+  assert.equal(captured.payload.credentials.id_token, credentials.id_token)
+  assert.equal(typeof captured.payload.credentials._token_version, 'number')
 })
 
 test('paginates the server account list until the final partial page', () => {
