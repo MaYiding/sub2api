@@ -11,8 +11,8 @@ This tool synchronizes matching OpenAI OAuth accounts between the local Cockpit 
 - Local OAuth uploads include `expires_at` derived from the access-token JWT, plus any supported optional OAuth metadata present locally. Server-only credential metadata is preserved during an upload.
 - If the tokens already match but server metadata is missing or stale, the tool still repairs the server credential record.
 - Generic account updates (usage refreshes, quota probes, notes, and scheduler state) are not treated as credential changes. Server credential changes are tracked with `_token_version`; divergent tokens use JWT issue time as a deterministic tie-breaker.
-- The server account and group lists are paginated. Local OAuth accounts missing on the server are created with their complete credential metadata and assigned to the active OpenAI group named `晴天纪` (override with `SUB2API_SYNC_GROUP_NAME`). Existing synced OAuth accounts missing that group have it appended without replacing any other group. Non-OAuth local records are excluded from this OAuth sync.
-- For matching local OpenAI accounts that the server marks `error`, non-schedulable, or account-level rate-limited, the sync pass probes upstream quota at most once per minute. A successful, fully available quota response calls the server runtime-recovery endpoint to clear stale account-level state without changing credentials or consuming a reset credit. Model-specific restrictions remain intact.
+- The server account and group lists are paginated. A local OAuth account missing on the server is skipped by default; it is created only with the explicit `--import-missing` option, then assigned to the active OpenAI group named `晴天纪` (override with `SUB2API_SYNC_GROUP_NAME`). Existing synced OAuth accounts missing that group have it appended without replacing any other group. Non-OAuth local records are excluded from this OAuth sync.
+- The syncer treats `schedulable=false` as an administrator-owned setting: it neither probes nor recovers that account's runtime state, and it avoids the OAuth write path that can clear errors. For schedulable accounts with an `error` or account-level rate-limit state, the sync pass probes upstream quota at most once per minute. A successful, fully available quota response calls the server runtime-recovery endpoint without changing credentials or consuming a reset credit. Model-specific restrictions remain intact.
 - If both sides changed and token age cannot establish a newer copy, the tool stops for that account instead of guessing.
 - Before a server-to-Cockpit pull, the previous encrypted envelope is saved under `/Volumes/MacData/09_tmp/cockpit-token-sync-backups/`.
 
@@ -25,6 +25,7 @@ Each SSH request has a 40-second hard process deadline, 15-second curl deadlines
 ```sh
 node tools/cockpit-token-sync/sync.js --dry-run
 node tools/cockpit-token-sync/sync.js
+node tools/cockpit-token-sync/sync.js --import-missing
 ```
 
 The script authenticates to the private container API over the existing SSH key. The Sub2API administrator password is read only on the server from the container environment and is not stored on the Mac.

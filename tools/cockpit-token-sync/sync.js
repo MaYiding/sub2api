@@ -35,7 +35,14 @@ const OPTIONAL_CREDENTIAL_KEYS = [
 ]
 const TIMESTAMP_CREDENTIAL_KEYS = ['expires_at', 'subscription_expires_at']
 
-const dryRun = process.argv.includes('--dry-run')
+function syncOptions(argv = process.argv.slice(2)) {
+  return {
+    dryRun: argv.includes('--dry-run'),
+    importMissingAccounts: argv.includes('--import-missing'),
+  }
+}
+
+const { dryRun, importMissingAccounts } = syncOptions()
 
 function positiveIntegerEnv(name, fallback) {
   const parsed = Number(process.env[name])
@@ -382,12 +389,18 @@ function exportServerAccounts(ids = []) {
   return Array.isArray(payload.accounts) ? payload.accounts : []
 }
 
-function applyServerCredentials(id, credentials, serverAccount = null) {
+function applyServerCredentials(id, credentials, serverAccount = null, options = {}) {
   const mergedCredentials = mergeServerCredentials(serverAccount, credentials)
-  const response = remoteRequest(
-    `/admin/accounts/${encodeURIComponent(id)}/apply-oauth-credentials`,
-    'POST',
-    JSON.stringify({ type: 'oauth', credentials: mergedCredentials }),
+  const preserveScheduling = options.preserveScheduling === true
+  const request = options.request || remoteRequest
+  const response = request(
+    preserveScheduling
+      ? `/admin/accounts/${encodeURIComponent(id)}`
+      : `/admin/accounts/${encodeURIComponent(id)}/apply-oauth-credentials`,
+    preserveScheduling ? 'PUT' : 'POST',
+    JSON.stringify(preserveScheduling
+      ? { credentials: mergedCredentials }
+      : { type: 'oauth', credentials: mergedCredentials }),
   )
   if (response && response.code !== undefined && response.code !== 0) {
     fail(`server rejected OAuth credentials for account ${id}`)
@@ -459,9 +472,8 @@ function recoverServerRuntimeState(id, request = remoteRequest) {
 
 function hasServerRateLimitState(account) {
   return Boolean(
-    account && (
+    account && account.schedulable !== false && (
       account.status === 'error' ||
-      account.schedulable === false ||
       account.rate_limited_at ||
       account.rate_limit_reset_at ||
       account.overload_until ||
@@ -669,6 +681,10 @@ function main() {
   for (const [email, local] of localByEmail) {
     const serverMeta = serverByEmail.get(email)
     if (!serverMeta) {
+      if (!importMissingAccounts) {
+        if (dryRun) log(`would skip ${email}: use --import-missing to create a server account`)
+        continue
+      }
       if (!syncGroup) {
         log(`blocked ${email}: required server group ${JSON.stringify(SYNC_GROUP_NAME)} is unavailable`)
         continue
@@ -700,7 +716,9 @@ function main() {
         if (!dryRun) {
           let adoptedServerAccount = serverAccount
           if (!sameCredentialFields(local.credentials, serverTokens)) {
-            adoptedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+            adoptedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount, {
+              preserveScheduling: serverMeta.schedulable === false,
+            })
             log(`pushed ${email}: completed server OAuth metadata`)
           }
           state.accounts[email] = stateFor(local, serverMeta, adoptedServerAccount)
@@ -713,7 +731,9 @@ function main() {
           if (dryRun) {
             log(`would adopt ${email}: newer Cockpit token -> server`)
           } else {
-            const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+            const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount, {
+              preserveScheduling: serverMeta.schedulable === false,
+            })
             const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
             state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
             changed = true
@@ -760,7 +780,9 @@ function main() {
       if (dryRun) {
         log(`would push ${email}: Cockpit credentials -> server`)
       } else {
-        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount, {
+          preserveScheduling: serverMeta.schedulable === false,
+        })
         const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
         state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
         changed = true
@@ -811,7 +833,9 @@ function main() {
       if (dryRun) {
         log(`would push ${email}: Cockpit -> server`)
       } else {
-        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount)
+        const appliedServerAccount = applyServerCredentials(serverMeta.id, local.credentials, serverAccount, {
+          preserveScheduling: serverMeta.schedulable === false,
+        })
         const refreshedMeta = listServerAccounts().find(account => account.id === serverMeta.id) || serverMeta
         state.accounts[email] = stateFor(local, refreshedMeta, appliedServerAccount)
         changed = true
@@ -839,6 +863,7 @@ if (require.main === module) {
 module.exports = {
   accessTokenIssuedAt,
   accessTokenExpiresAt,
+  applyServerCredentials,
   credentialDirection,
   credentialMetadataSnapshot,
   credentialsFromLocal,
@@ -853,6 +878,7 @@ module.exports = {
   sameCredentialFields,
   sameCredentialMetadata,
   sameTokens,
+  syncOptions,
   serverAccountCreatePayload,
   resolveSyncGroup,
   serverCredentialVersion,
