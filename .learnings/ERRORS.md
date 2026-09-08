@@ -1169,3 +1169,36 @@ Use one `Update File` operation when replacing an existing file's contents.
 - **Notes**: Replaced the delete/add pair with one update operation. The same pattern recurred during the 2026-08-29 and 2026-08-30 automation-memory updates; both failed atomically and were corrected with a single update operation. The prevention rule is also retained in automation memory.
 
 ---
+
+## [ERR-20260908-001] zsh-readonly-status-variable
+
+**Logged**: 2026-09-08T12:07:35+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A final HTTP probe loop used zsh's read-only `status` variable name.
+
+### Error
+```
+zsh:1: read-only variable: status
+```
+
+### Context
+- The probe loop assigned curl's HTTP code to `status` while running under zsh.
+- The assignment aborted the loop before any HTTP request ran; service listeners and dependency probes were unaffected.
+
+### Suggested Fix
+Use a non-special variable name such as `http_code` or `probe_code` in zsh diagnostics.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-08T12:07:35+08:00
+- **Commit/PR**: local diagnostic correction
+- **Notes**: Replaced the variable name and reran the HTTP probes successfully.
+
+---
