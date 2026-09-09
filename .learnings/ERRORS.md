@@ -1,5 +1,73 @@
 # Error Log
 
+## [ERR-20260909-002] concurrent-worktree-merge-autostash
+
+**Logged**: 2026-09-09T11:43:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A main-to-dev merge was interrupted because another automation briefly modified and committed files in the same checkout between the clean-status check and the merge.
+
+### Error
+```
+fatal: stash failed
+```
+
+### Context
+- The checkout was clean when the dev synchronization branch was created.
+- A concurrent automation was completing the provider-count compatibility fix in the same working tree.
+- Git observed transient working-tree changes while starting the merge; the concurrent automation committed them moments later and the worktree returned to clean state.
+
+### Suggested Fix
+Recheck the branch and worktree immediately before every write operation in shared automation checkouts, and retry only after confirming the concurrent commit is preserved remotely.
+
+### Metadata
+- Reproducible: timing-dependent
+- Related Files: .git/index, .learnings/ERRORS.md
+- See Also: ERR-20260829-002
+
+### Resolution
+- **Resolved**: 2026-09-09T11:44:00+08:00
+- **Commit/PR**: current main-to-dev synchronization PR
+- **Notes**: Verified the concurrent fix was committed and merged through PR #90, confirmed a clean worktree, then retried the merge without discarding any changes.
+
+---
+
+## [ERR-20260909-001] upstream-provider-count-assertion
+
+**Logged**: 2026-09-09T11:22:34+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+An upstream Grok monitor test hard-coded eight provider buttons and failed after the fork added MiniMax as a ninth provider.
+
+### Error
+```
+expected providerButtons to have a length of 8 but got 9
+```
+
+### Context
+- The upstream test correctly validated Grok availability and defaults but assumed the upstream-only provider catalog size.
+- The merged fork catalog legitimately includes MiniMax, so the rendered grid and `PROVIDERS` both contain nine entries.
+
+### Suggested Fix
+Assert the rendered button count against the shared `PROVIDERS.length` source of truth while keeping provider-specific assertions explicit.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts, frontend/src/constants/channelMonitor.ts
+
+### Resolution
+- **Resolved**: 2026-09-09T11:23:10+08:00
+- **Commit/PR**: #90
+- **Notes**: Replaced the literal count with `PROVIDERS.length`; the focused Grok test passed.
+
+---
+
 ## [ERR-20260902-002] local-env-secret-output
 
 **Logged**: 2026-09-02T11:28:00+08:00
