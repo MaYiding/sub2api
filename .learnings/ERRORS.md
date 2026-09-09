@@ -1,5 +1,38 @@
 # Error Log
 
+## [ERR-20260909-001] upstream-provider-count-assertion
+
+**Logged**: 2026-09-09T11:22:34+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+An upstream Grok monitor test hard-coded eight provider buttons and failed after the fork added MiniMax as a ninth provider.
+
+### Error
+```
+expected providerButtons to have a length of 8 but got 9
+```
+
+### Context
+- The upstream test correctly validated Grok availability and defaults but assumed the upstream-only provider catalog size.
+- The merged fork catalog legitimately includes MiniMax, so the rendered grid and `PROVIDERS` both contain nine entries.
+
+### Suggested Fix
+Assert the rendered button count against the shared `PROVIDERS.length` source of truth while keeping provider-specific assertions explicit.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts, frontend/src/constants/channelMonitor.ts
+
+### Resolution
+- **Resolved**: 2026-09-09T11:23:10+08:00
+- **Commit/PR**: follow-up compatibility PR
+- **Notes**: Replaced the literal count with `PROVIDERS.length`; the focused Grok test passed.
+
+---
+
 ## [ERR-20260902-001] git-rm-ignored-residual-file
 
 **Logged**: 2026-09-02T11:20:00+08:00
