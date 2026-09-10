@@ -1,5 +1,39 @@
 # Error Log
 
+## [ERR-20260910-001] gh-defaulted-to-upstream-repository
+
+**Logged**: 2026-09-10T16:55:48+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+An unqualified `gh pr` query targeted the source repository instead of this fork in a multi-remote checkout.
+
+### Error
+```
+gh pr view 92 returned Wei-Shaw/sub2api pull request #92 rather than MaYiding/sub2api pull request #92
+```
+
+### Context
+- The checkout has both `origin` (the fork) and `upstream` (the source repository).
+- GitHub CLI repository inference selected `Wei-Shaw/sub2api`, so the read-only PR metadata was valid but belonged to the wrong repository.
+- No repository or remote state changed before the mismatch was detected.
+
+### Suggested Fix
+Pass `-R MaYiding/sub2api` to every fork PR, workflow, and issue query; use `-R Wei-Shaw/sub2api` only for an intentional source-repository query.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/config
+
+### Resolution
+- **Resolved**: 2026-09-10T16:55:48+08:00
+- **Commit/PR**: current synchronization run
+- **Notes**: Re-ran PR #92 and the open-PR listing with an explicit fork repository and continued from the correct results.
+
+---
+
 ## [ERR-20260909-002] concurrent-worktree-merge-autostash
 
 **Logged**: 2026-09-09T11:43:00+08:00
