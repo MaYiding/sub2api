@@ -1,5 +1,74 @@
 # Error Log
 
+## [ERR-20260911-002] chained-merge-used-parent-checkout
+
+**Logged**: 2026-09-11T11:10:42+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+After creating an isolated worktree in a chained shell command, the following `git merge` ran in the parent checkout and advanced local `dev` unexpectedly.
+
+### Error
+```
+dev advanced from 4f5c4fa33 to 929ddcb6c via merge upstream/main
+```
+
+### Context
+- `git worktree add ... && git merge ...` was executed with the parent checkout as the command working directory.
+- The new worktree was created correctly, but the chained merge inherited the parent directory instead of entering the new worktree.
+- The remote `origin/dev` was not changed; the accidental merge commit was retained before correction.
+
+### Suggested Fix
+Use `git -C <worktree> merge ...` or a separate command with an explicit worktree working directory after every worktree creation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/worktrees, .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-09-11T11:14:00+08:00
+- **Commit/PR**: current synchronization run
+- **Notes**: Saved the accidental merge under a backup branch and restored local `dev` to `origin/dev` before continuing in the isolated worktree.
+
+---
+
+## [ERR-20260911-001] git-command-scoped-remote-url-override
+
+**Logged**: 2026-09-11T11:05:23+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Setting `remote.<name>.url` with `git -c` did not override the configured HTTPS URL for fetches in this checkout.
+
+### Error
+```
+fatal: unable to access 'https://github.com/Wei-Shaw/sub2api.git/': LibreSSL SSL_connect: SSL_ERROR_SYSCALL
+fatal: unable to access 'https://github.com/MaYiding/sub2api.git/': LibreSSL SSL_connect: SSL_ERROR_SYSCALL
+```
+
+### Context
+- The checkout has HTTPS `origin` and `upstream` remotes and recurring HTTPS/TLS failures.
+- A parallel fetch attempt used command-scoped `remote.origin.url` and `remote.upstream.url` values, but Git still contacted the configured HTTPS endpoints.
+- No ref or remote configuration changed.
+
+### Suggested Fix
+Use command-scoped `url.<ssh-url>.insteadOf` rewrites (or an explicit temporary repository URL) and verify the resulting refs after fetch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/config, .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-09-11T11:07:00+08:00
+- **Commit/PR**: current synchronization run
+- **Notes**: Refreshed both remotes successfully with the temporary VPN HTTP proxy; no remote or global Git configuration was changed.
+
+---
+
 ## [ERR-20260909-001] upstream-provider-count-assertion
 
 **Logged**: 2026-09-09T11:22:34+08:00
