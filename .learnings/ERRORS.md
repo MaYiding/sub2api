@@ -1,5 +1,38 @@
 # Error Log
 
+## [ERR-20260911-003] cleanup-command-used-parent-directory
+
+**Logged**: 2026-09-11T12:04:56+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The temporary worktree cleanup succeeded, but the chained branch-delete command used `/Users/mayiding/Desktop/GitMy` instead of the repository path and therefore did not run.
+
+### Error
+```
+fatal: not a git repository (or any of the parent directories): .git
+```
+
+### Context
+- The command used `git -C /Users/mayiding/Desktop/GitMy branch -d ...` after removing the two explicit `/tmp` worktrees.
+- No branch or remote state was changed by the failed delete step; the intended local temporary branches were deleted in a corrected command.
+
+### Suggested Fix
+Pass `/Users/mayiding/Desktop/GitMy/sub2api` as `-C` for every repository operation and verify the path before chaining cleanup commands.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/worktrees, .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-09-11T12:05:30+08:00
+- **Commit/PR**: current synchronization run
+- **Notes**: Re-ran branch deletion from the explicit repository path; only the two merged temporary branches were removed.
+
+---
+
 ## [ERR-20260911-002] chained-merge-used-parent-checkout
 
 **Logged**: 2026-09-11T11:10:42+08:00
