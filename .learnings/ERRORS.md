@@ -33,6 +33,41 @@ Pass `/Users/mayiding/Desktop/GitMy/sub2api` as `-C` for every repository operat
 
 ---
 
+## [ERR-20260912-001] github-ssh-fetch
+
+**Logged**: 2026-09-12T11:03:32+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Command-scoped SSH fetches to GitHub were closed by the remote endpoint.
+
+### Error
+```
+Connection closed by 20.205.243.166 port 22
+fatal: Could not read from remote repository.
+```
+
+### Context
+- Attempted to refresh `upstream/main` and `origin/main`/`origin/dev` using explicit SSH repository URLs.
+- Configured HTTPS remotes were unchanged.
+
+### Suggested Fix
+Retry through the temporary VPN HTTP proxy used by prior automation runs, then remove proxy variables after the fetch.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: none
+- See Also: ERR-20260911-001
+
+### Resolution
+- **Resolved**: 2026-09-12T11:05:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Retried the same refspecs through the temporary VPN HTTP proxy; `upstream/main`, `origin/main`, and `origin/dev` refreshed successfully. Proxy variables were command-scoped and not persisted.
+
+---
+
 ## [ERR-20260911-002] chained-merge-used-parent-checkout
 
 **Logged**: 2026-09-11T11:10:42+08:00
@@ -1404,5 +1439,39 @@ Use a non-special variable name such as `http_code` or `probe_code` in zsh diagn
 - **Resolved**: 2026-09-08T12:07:35+08:00
 - **Commit/PR**: local diagnostic correction
 - **Notes**: Replaced the variable name and reran the HTTP probes successfully.
+
+---
+
+## [ERR-20260912-002] git-branch-ff-only-option
+
+**Logged**: 2026-09-12T11:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Attempted to use a nonexistent `--ff-only` option with `git branch`.
+
+### Error
+```
+error: unknown option `ff-only'
+usage: git branch ...
+```
+
+### Context
+- Intended to fast-forward local `main` to `origin/main` after PR #99 merged.
+- The command failed before changing refs.
+
+### Suggested Fix
+Verify the old branch is an ancestor, then use `git branch -f <branch> <remote-ref>`; use `git merge --ff-only` when updating a checked-out branch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-12T11:21:00+08:00
+- **Commit/PR**: pending
+- **Notes**: Confirmed `main` was an ancestor of `origin/main`, fast-forwarded with `git branch -f`, and fast-forwarded checked-out `dev` with `git merge --ff-only`.
 
 ---
