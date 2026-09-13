@@ -1475,3 +1475,70 @@ Verify the old branch is an ancestor, then use `git branch -f <branch> <remote-r
 - **Notes**: Confirmed `main` was an ancestor of `origin/main`, fast-forwarded with `git branch -f`, and fast-forwarded checked-out `dev` with `git merge --ff-only`.
 
 ---
+
+## [ERR-20260913-001] gh-pr-create-wrapper-quoting
+
+**Logged**: 2026-09-13T11:07:41+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first GitHub PR creation call was rejected by the local tool wrapper before shell execution because a multi-line body was embedded directly in a JavaScript string.
+
+### Error
+```text
+Script error:
+SyntaxError: Invalid or unexpected token
+```
+
+### Context
+- `gh pr create` was invoked through the orchestration wrapper with literal newlines in the `--body` argument.
+- No shell command ran and no remote state changed; the sync branch had already been pushed successfully.
+
+### Suggested Fix
+Use a single-line shell argument or an apply-patched body file when invoking multi-line GitHub CLI content through the wrapper.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-13T11:08:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Retried with a single-line body argument.
+
+---
+
+## [ERR-20260913-002] gh-pr-merge-short-head-sha
+
+**Logged**: 2026-09-13T11:20:15+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+GitHub rejected the first PR merge request because the expected head commit was supplied as a short SHA.
+
+### Error
+```text
+GraphQL: Variable $input of type MergePullRequestInput! was provided invalid value for expectedHeadOid (Could not coerce value "a55f1bcd8" to GitObjectID)
+```
+
+### Context
+- `gh pr merge 102 --match-head-commit a55f1bcd8` was rejected before merge evaluation.
+- No remote merge or branch deletion occurred.
+
+### Suggested Fix
+Resolve and pass the full 40-character head SHA to `--match-head-commit`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-13T11:21:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Retried with the full head SHA.
+
+---
