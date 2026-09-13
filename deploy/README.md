@@ -17,6 +17,9 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `docker-compose.yml` | Docker Compose configuration (named volumes) |
 | `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
 | `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
+| `blue-green-deploy.sh` | Pre-built image blue-green deployment with health gate and rollback |
+| `BLUE_GREEN.md` | Blue-green deployment preparation and operating procedure |
+| `sub2api-auto-recharge.py` | Source-managed low-balance recharge job; follows the active blue-green slot |
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |
@@ -45,6 +48,22 @@ Apple-silicon Macs running macOS 26 can run the complete Sub2API, PostgreSQL, an
 The script uses Apple named volumes, starts dependencies in order, and performs live readiness checks. The application container supervises the Sub2API process so the Web UI's update-and-restart flow can relaunch an updated binary. It does not provide host-level automatic startup; run `./apple-container.sh up` after a host reboot. Docker Compose remains the recommended production deployment path.
 
 See [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) for configuration, upgrades, persistence, networking behavior, and limitations.
+
+## Blue-Green Production Deployment
+
+For a production instance that must stay available during application image
+updates, use [BLUE_GREEN.md](./BLUE_GREEN.md). It keeps PostgreSQL and Redis
+in place, starts the new application on an alternate loopback port, checks the
+candidate, and hot-reloads Caddy before draining the old container.
+
+The workflow requires a pre-built `linux/amd64` image. It never builds on the
+production host and never uses `docker compose down`.
+
+The automatic recharge service must run the source-managed
+`sub2api-auto-recharge.py`. It reads `deploy/.blue-green-active` and uses the
+active container and loopback port, so a blue-green cutover does not silently
+disable scheduled balance checks. It considers every active account, including
+administrators, when applying the low-balance threshold.
 
 ---
 
