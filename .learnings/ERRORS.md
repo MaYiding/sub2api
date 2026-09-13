@@ -407,3 +407,36 @@ Use a single-line shell argument or an apply-patched body file when invoking mul
 - **Notes**: Retried with a single-line body argument.
 
 ---
+
+## [ERR-20260913-002] gh-pr-merge-short-head-sha
+
+**Logged**: 2026-09-13T11:20:15+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+GitHub rejected the first PR merge request because the expected head commit was supplied as a short SHA.
+
+### Error
+```text
+GraphQL: Variable $input of type MergePullRequestInput! was provided invalid value for expectedHeadOid (Could not coerce value "a55f1bcd8" to GitObjectID)
+```
+
+### Context
+- `gh pr merge 102 --match-head-commit a55f1bcd8` was rejected before merge evaluation.
+- No remote merge or branch deletion occurred.
+
+### Suggested Fix
+Resolve and pass the full 40-character head SHA to `--match-head-commit`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-13T11:21:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Retried with the full head SHA.
+
+---
