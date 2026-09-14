@@ -1542,3 +1542,136 @@ Resolve and pass the full 40-character head SHA to `--match-head-commit`.
 - **Notes**: Retried with the full head SHA.
 
 ---
+
+## [ERR-20260914-001] exec-rejects-rm-temp-cleanup
+
+**Logged**: 2026-09-14T11:07:47+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The command runner rejected a read-only verification wrapper because it included `rm -f` cleanup for a temporary scan file.
+
+### Error
+```text
+Rejected: rm -f style commands are not permitted. Use a safer approach
+```
+
+### Context
+- A combined service and repository verification command used a PID-suffixed temporary file for conflict-marker output.
+- The command was rejected before execution; no temporary file, repository state, or service state changed.
+
+### Suggested Fix
+Use shell variables, process substitution, or direct pipelines for bounded diagnostic output; avoid temporary-file cleanup when no file is required.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-14T11:07:47+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Replaced the temporary-file scan with a direct `git grep` pipeline.
+
+---
+
+## [ERR-20260914-002] conflict-scan-regex-false-positive
+
+**Logged**: 2026-09-14T11:07:47+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first conflict-marker scan matched a legitimate long equals-sign string embedded in a Go source line.
+
+### Error
+```text
+backend/internal/pkg/antigravity/request_transformer.go:274:===========================================`
+```
+
+### Context
+- The scan used `^(<<<<<<<|=======|>>>>>>>)`, which treats any line beginning with seven equals signs as a merge conflict.
+- The repository contains a longer equals-sign separator followed by a backtick; no conflict marker was present.
+
+### Suggested Fix
+Match complete Git marker lines only: `^(<<<<<<< |>>>>>>> |=======$)`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/internal/pkg/antigravity/request_transformer.go
+
+### Resolution
+- **Resolved**: 2026-09-14T11:07:47+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Re-ran the scan with exact marker-line matching; no conflicts were found.
+
+---
+
+## [ERR-20260914-003] git-push-https-reset
+
+**Logged**: 2026-09-14T11:11:15+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first push of the diagnostics branch was reset by GitHub over the configured HTTPS remote.
+
+### Error
+```text
+fatal: unable to access 'https://github.com/MaYiding/sub2api.git/': Recv failure: Connection reset by peer
+```
+
+### Context
+- The local branch `agent/diagnostics-20260914` was committed successfully as `7af83b612`.
+- The direct `git push -u origin agent/diagnostics-20260914` failed before any remote ref update.
+
+### Suggested Fix
+Retry the single Git operation with the temporary VPN HTTP proxy, keeping configured HTTPS remotes unchanged and clearing proxy variables afterward.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-14T11:11:15+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: A command-scoped proxy retry is planned; verify the remote branch SHA after push.
+
+---
+
+## [ERR-20260914-004] gh-pr-checks-graphql-eof
+
+**Logged**: 2026-09-14T11:11:15+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The GitHub CLI check watcher terminated after an unexpected EOF from the GraphQL API while CI was still running.
+
+### Error
+```text
+Post "https://api.github.com/graphql": unexpected EOF
+```
+
+### Context
+- `gh pr checks 104 --watch` had already observed shell, frontend, security, and lint results.
+- The watcher exited during a status refresh; the associated CI run remained `in_progress` with integration tests active.
+
+### Suggested Fix
+Treat watcher EOF as a transport interruption, then re-query the run with a fresh command-scoped proxy session before making any CI or merge decision.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: none
+- Recurrence-Count: 2
+
+### Resolution
+- **Resolved**: 2026-09-14T11:11:15+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Recurred once during the second head's watcher; use fresh `gh run view`/`gh pr checks` calls for final status.
+
+---
