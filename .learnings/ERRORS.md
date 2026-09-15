@@ -440,3 +440,137 @@ Resolve and pass the full 40-character head SHA to `--match-head-commit`.
 - **Notes**: Retried with the full head SHA.
 
 ---
+
+## [ERR-20260915-001] empty-apply-patch-probe
+
+**Logged**: 2026-09-15T11:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+An empty `apply_patch` probe was rejected before any repository change.
+
+### Error
+```text
+patch rejected: empty patch
+```
+
+### Context
+- The automation invoked `apply_patch` with only the begin/end markers before creating the sync worktree.
+- The patch tool correctly rejected the no-op input; no file or Git state changed.
+
+### Suggested Fix
+Call `apply_patch` only for concrete file edits; Git merge and worktree operations do not require an empty patch preflight.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-15T11:00:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Continued with the intended Git worktree and merge commands directly.
+
+---
+
+## [ERR-20260915-002] dev-only-patch-anchor-on-main
+
+**Logged**: 2026-09-15T11:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A diagnostics append used a `dev`-only context line while editing a branch based on `main`.
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+- The expected anchor came from the original `dev` checkout's newer `.learnings/ERRORS.md`.
+- The isolated upstream-sync worktree is based on `origin/main`, whose fork diagnostics history is intentionally older.
+- The failed patch made no file changes.
+
+### Suggested Fix
+Read the target worktree's file before patching branch-specific diagnostics instead of reusing context from another branch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+- **Resolved**: 2026-09-15T11:00:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Read the main worktree file tail and reapplied the append using its actual final entry.
+
+---
+
+## [ERR-20260915-003] chained-worktree-command-kept-parent-cwd
+
+**Logged**: 2026-09-15T11:05:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A merge chained after `git worktree add` still ran in the original checkout and temporarily advanced local `dev`.
+
+### Error
+```text
+## dev...origin/dev [ahead 45]
+```
+
+### Context
+- `git worktree add <path> ... && git merge ...` does not change the shell working directory after creating the worktree.
+- The merge was clean, remained local, and was detected before any push.
+- The accidental commit was preserved on `backup/accidental-dev-sync-20260915` before restoring `dev` to `origin/dev`.
+
+### Suggested Fix
+Run every isolated-worktree command with that worktree as the command runner's explicit `workdir`, or use `git -C <worktree> ...`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-15T11:05:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Preserved the accidental commit, restored local `dev` exactly, and continued only in the isolated worktree.
+
+---
+
+## [ERR-20260915-004] expanded-short-sha-by-guessing
+
+**Logged**: 2026-09-15T11:05:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The first recovery branch command used an invalid guessed expansion of a short commit SHA.
+
+### Error
+```text
+fatal: not a valid branch point
+```
+
+### Context
+- A 9-character displayed SHA was incorrectly extended instead of resolving the exact object ID.
+- Git rejected the branch command before any branch, checkout, or working-tree change.
+
+### Suggested Fix
+Always obtain the full object ID with a separate `git rev-parse <ref>` call before using exact-SHA recovery operations.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-15T11:05:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Resolved the real 40-character HEAD, created the backup branch, and restored `dev` successfully.
+
+---
