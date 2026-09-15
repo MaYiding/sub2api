@@ -574,3 +574,38 @@ Always obtain the full object ID with a separate `git rev-parse <ref>` call befo
 - **Notes**: Resolved the real 40-character HEAD, created the backup branch, and restored `dev` successfully.
 
 ---
+
+## [ERR-20260915-005] duplicate-scan-masked-awk-failure
+
+**Logged**: 2026-09-15T11:07:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+An invalid awk regular expression failed inside command substitution while the wrapper still printed a false duplicate-scan success line.
+
+### Error
+```text
+awk: nonterminated character class
+duplicate_artifacts=none
+```
+
+### Context
+- The awk regex used an unescaped slash inside a slash-delimited character class.
+- The failing command was inside an assignment, and the subsequent empty-string check allowed the wrapper to exit successfully.
+- No files were changed or deleted.
+
+### Suggested Fix
+Use `git ls-files` piped to `rg` with an explicit no-match allowance, and do not let a producer failure be interpreted as an empty successful result.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-09-15T11:07:00+08:00
+- **Commit/PR**: pending sync PR
+- **Notes**: Replaced the awk expression and reran the bounded Git-index duplicate scan successfully.
+
+---
