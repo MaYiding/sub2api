@@ -1667,12 +1667,13 @@ Treat watcher EOF as a transport interruption, then re-query the run with a fres
 ### Metadata
 - Reproducible: unknown
 - Related Files: none
-- Recurrence-Count: 2
+- Recurrence-Count: 3
+- Last-Seen: 2026-09-15
 
 ### Resolution
 - **Resolved**: 2026-09-14T11:11:15+08:00
 - **Commit/PR**: pending diagnostics PR
-- **Notes**: Recurred once during the second head's watcher; use fresh `gh run view`/`gh pr checks` calls for final status.
+- **Notes**: Recurred once during the second head's watcher and again while watching PR #106; fresh one-shot `gh run view` and `gh pr view` calls returned the authoritative successful state.
 
 ---
 
@@ -1877,5 +1878,41 @@ When the same exact SHA has one pass and one race-shaped failure, rerun only the
 - **Resolved**: 2026-09-15T11:33:43+08:00
 - **Commit/PR**: #105 validation
 - **Notes**: Rerun attempt 2 of push CI `34923806042` passed unit and integration tests in full; PR #105 then merged as `6ceb1525d5fdef0ca32e22da8d4b646d6e0ecc69`.
+
+---
+
+## [ERR-20260915-007] empty-health-response-hash-false-positive
+
+**Logged**: 2026-09-15T11:57:50+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A health wrapper continued after curl connection failures and reported two empty response bodies as matching.
+
+### Error
+```text
+curl: (7) Failed to connect to 127.0.0.1 port 8080
+curl: (7) Failed to connect to 127.0.0.1 port 3000
+settings_match=yes
+```
+
+### Context
+- Backend and frontend had no listeners, so both body-fetching curl commands failed.
+- The wrapper did not stop on those failures and hashed two empty shell variables to the same SHA-256 value.
+- PostgreSQL 5432 and Redis 6379 remained healthy; no application restart was attempted because the required script compiles locally.
+
+### Suggested Fix
+Require both curl commands to succeed and return HTTP 200 before hashing bodies; report body equality only after those preconditions pass.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tools/sub2api-dev.sh
+
+### Resolution
+- **Resolved**: 2026-09-15T11:57:50+08:00
+- **Commit/PR**: pending diagnostics PR
+- **Notes**: Discarded the empty-body equality result and reported ports 3000/8080 as stopped and runtime acceptance as blocked by the no-local-compilation policy.
 
 ---
