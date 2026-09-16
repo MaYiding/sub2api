@@ -30,14 +30,17 @@ api.sub2api.com {
 	reverse_proxy localhost:8080 {
 		# 健康检查
 		health_uri /health
-		health_interval 30s
-		health_timeout 10s
+		health_interval 2s
+		health_timeout 5s
 		health_status 200
 
 		# 负载均衡策略（单节点可忽略，多节点时有用）
-		lb_policy round_robin
+		lb_policy first
 		lb_try_duration 5s
 		lb_try_interval 250ms
+		health_fails 2
+		health_passes 2
+		stream_close_delay 5m
 
 		# 仅从实际 TCP 对端生成转发头，避免透传客户端伪造值。
 		header_up X-Real-IP {remote_host}
