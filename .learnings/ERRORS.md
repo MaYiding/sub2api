@@ -1916,3 +1916,77 @@ Require both curl commands to succeed and return HTTP 200 before hashing bodies;
 - **Notes**: Discarded the empty-body equality result and reported ports 3000/8080 as stopped and runtime acceptance as blocked by the no-local-compilation policy.
 
 ---
+## [ERR-20260916-001] govulncheck-grpc-1-82-1
+
+**Logged**: 2026-09-16T11:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: security
+
+### Summary
+GitHub Security Scan rejected upstream sync PR #108 because the merged dependency graph directly reached two vulnerabilities in `google.golang.org/grpc v1.82.1`.
+
+### Error
+```text
+Vulnerability #1: GO-2026-6443 (fixed in google.golang.org/grpc@v1.82.2)
+Vulnerability #2: GO-2026-6348 (fixed in google.golang.org/grpc@v1.83.1)
+Your code is affected by 2 vulnerabilities from 1 module.
+```
+
+### Context
+- PR: #108, `chore: sync upstream main (2026-09-16)`
+- Failed runs: push Security Scan `35050257171`; pull-request Security Scan `35050262034`
+- CI tests, frontend, shell, and lint jobs passed for the same commit.
+
+### Suggested Fix
+Upgrade the direct backend requirement and checksums to `google.golang.org/grpc v1.83.1`, then rerun the remote Security Scan.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `backend/go.mod`, `backend/go.sum`
+- See Also: none
+
+### Resolution
+- **Resolved**: 2026-09-16T11:20:00+08:00
+- **Commit/PR**: PR #108, merged as `ac58ef02ba0ae6c4ce316cc4f41310054fd243e6`
+- **Notes**: Bumped gRPC through v1.83.2 and regenerated the Go 1.27 module graph remotely. Final push and pull-request CI/security checks passed; no local compile, build, or test was run.
+
+---
+
+## [ERR-20260916-002] govulncheck-grpc-1-83-1
+
+**Logged**: 2026-09-16T11:45:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: security
+
+### Summary
+The refreshed GitHub Security Scan database still reported `GO-2026-6443` against the initial gRPC remediation version `v1.83.1`.
+
+### Error
+```text
+Vulnerability #1: GO-2026-6443
+Module: google.golang.org/grpc
+Found in: google.golang.org/grpc@v1.83.1
+Fixed in: google.golang.org/grpc@v1.83.2
+```
+
+### Context
+- PR: #108, latest remediation commit `2973ee725`
+- Failed runs: push Security Scan `35052592429`; pull-request Security Scan `35052590392`
+- The canonical module graph, CI test, frontend, shell, and lint changes from the previous remediation were otherwise accepted or still running.
+
+### Suggested Fix
+Upgrade the direct backend requirement and checksums to `google.golang.org/grpc v1.83.2`, then regenerate the Go 1.27 module graph and rerun remote CI/security checks.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `backend/go.mod`, `backend/go.sum`
+- See Also: ERR-20260916-001
+
+### Resolution
+- **Resolved**: 2026-09-16T12:03:43+08:00
+- **Commit/PR**: PR #108, merged as `ac58ef02ba0ae6c4ce316cc4f41310054fd243e6`
+- **Notes**: Updated the security fix to v1.83.2 and regenerated the Go 1.27 module graph remotely. Final push and pull-request CI/security checks passed; no local compile, build, or test was run.
+
+---
