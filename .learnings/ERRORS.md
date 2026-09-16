@@ -1990,3 +1990,72 @@ Upgrade the direct backend requirement and checksums to `google.golang.org/grpc 
 - **Notes**: Updated the security fix to v1.83.2 and regenerated the Go 1.27 module graph remotely. Final push and pull-request CI/security checks passed; no local compile, build, or test was run.
 
 ---
+
+## [ERR-20260916-003] post-merge-websocket-preemption-flake
+
+**Logged**: 2026-09-16T12:42:03+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The post-merge `dev` CI test job intermittently failed the WebSocket preemption cleanup assertion even though both PR test runs passed.
+
+### Error
+```text
+failed to close WebSocket: received close frame: status = StatusTryAgainLater and reason = "session preempted by a newer connection"
+```
+
+### Context
+- Post-merge CI run `35055423358` failed on attempts 1 and 2 in `TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_SameCodexThreadStillPreempts`.
+- The same exact head `67769e5e1f08db0264508ff4eaee4b0235bf32cb` passed both PR CI test runs `35054699108` and `35054716868`.
+- Attempt 3 of post-merge CI passed unit and integration tests; no code change was made.
+
+### Suggested Fix
+Keep this assertion classified as intermittent and rerun only the failed remote test job before changing production or test code.
+
+### Metadata
+- Reproducible: intermittent
+- Related Files: `backend/internal/service/openai_ws_forwarder_ingress_execution_scope_test.go`
+- See Also: ERR-20260915-006
+
+### Resolution
+- **Resolved**: 2026-09-16T12:50:00+08:00
+- **Commit/PR**: post-merge CI run `35055423358`, attempt 3
+- **Notes**: Remote rerun passed all unit and integration tests. No local compile, build, or test was run.
+
+---
+
+## [ERR-20260916-004] polling-wrapper-syntax-error
+
+**Logged**: 2026-09-16T12:47:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Two polling calls were rejected by the JavaScript orchestration wrapper because the result object was missing a closing brace.
+
+### Error
+```text
+SyntaxError: missing ) after argument list
+```
+
+### Context
+- The malformed calls only polled existing `gh run watch` sessions and made no repository or remote-state changes.
+- The watch sessions remained active and were resumed with a simpler valid wrapper expression.
+
+### Suggested Fix
+Use the minimal `const r = await tools.write_stdin(...); text(r.output);` form for long-running session polling.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+- See Also: ERR-20260915-001
+
+### Resolution
+- **Resolved**: 2026-09-16T12:50:00+08:00
+- **Commit/PR**: diagnostics PR for this run
+- **Notes**: Corrected the wrapper syntax; no repository or external state was changed by the failed calls.
+
+---
