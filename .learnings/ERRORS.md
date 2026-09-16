@@ -609,3 +609,40 @@ Use `git ls-files` piped to `rg` with an explicit no-match allowance, and do not
 - **Notes**: Replaced the awk expression and reran the bounded Git-index duplicate scan successfully.
 
 ---
+
+## [ERR-20260916-001] govulncheck-grpc-1-82-1
+
+**Logged**: 2026-09-16T11:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: security
+
+### Summary
+GitHub Security Scan rejected upstream sync PR #108 because the merged dependency graph directly reached two vulnerabilities in `google.golang.org/grpc v1.82.1`.
+
+### Error
+```text
+Vulnerability #1: GO-2026-6443 (fixed in google.golang.org/grpc@v1.82.2)
+Vulnerability #2: GO-2026-6348 (fixed in google.golang.org/grpc@v1.83.1)
+Your code is affected by 2 vulnerabilities from 1 module.
+```
+
+### Context
+- PR: #108, `chore: sync upstream main (2026-09-16)`
+- Failed runs: push Security Scan `35050257171`; pull-request Security Scan `35050262034`
+- CI tests, frontend, shell, and lint jobs passed for the same commit.
+
+### Suggested Fix
+Upgrade the direct backend requirement and checksums to `google.golang.org/grpc v1.83.1`, then rerun the remote Security Scan.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `backend/go.mod`, `backend/go.sum`
+- See Also: none
+
+### Resolution
+- **Resolved**: 2026-09-16T11:20:00+08:00
+- **Commit/PR**: pending CI rerun for PR #108
+- **Notes**: Bumped gRPC to v1.83.1 using checksums returned by sum.golang.org. No local compile, build, or test was run.
+
+---
