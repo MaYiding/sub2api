@@ -514,7 +514,7 @@ func TestQueryUsageAvailableClearsOnlyAccountWideRuntimeState(t *testing.T) {
 
 	blocker := &quotaRuntimeBlockRecorder{}
 	tempCache := &quotaTempUnschedCacheRecorder{}
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	svc.runtimeBlocker = blocker
 	svc.tempUnschedCache = tempCache
 	usage, err := svc.QueryUsage(context.Background(), account.ID)
