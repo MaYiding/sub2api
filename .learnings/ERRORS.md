@@ -2059,3 +2059,40 @@ Use the minimal `const r = await tools.write_stdin(...); text(r.output);` form f
 - **Notes**: Corrected the wrapper syntax; no repository or external state was changed by the failed calls.
 
 ---
+
+## [ERR-20260930-001] cherry-picked-constructor-call-not-updated
+
+**Logged**: 2026-09-30T11:23:54+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The `dev` synchronization CI failed because a cherry-picked quota test still called `NewOpenAIQuotaService` with the pre-referral constructor signature.
+
+### Error
+```text
+internal/service/openai_quota_spark_window_test.go:517:57: not enough arguments in call to NewOpenAIQuotaService
+have (*stubQuotaAccountRepo, nil, *OpenAITokenProvider, PrivacyClientFactory)
+want (AccountRepository, ProxyRepository, *OpenAITokenProvider, PrivacyClientFactory, OpenAIReferralClient)
+```
+
+### Context
+- PR #114 transplanted the maintained operations customization commits from conflicting PR #95 onto the latest `dev` baseline.
+- Conflict resolution combined the latest referral client dependency with the customization's temporary-unschedulable cache wiring.
+- Static review checked `ProvideOpenAIQuotaService` call sites but did not enumerate every direct `NewOpenAIQuotaService` test constructor call before the first push.
+
+### Suggested Fix
+After resolving constructor or provider conflicts during a cherry-pick, enumerate both provider and direct constructor call sites across the repository before pushing, then let remote CI perform compilation and tests.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `backend/internal/service/openai_quota_spark_window_test.go`, `backend/internal/service/openai_quota_service.go`, `backend/internal/service/wire.go`, `backend/cmd/server/wire_gen.go`
+- See Also: none
+
+### Resolution
+- **Resolved**: 2026-09-30T11:23:54+08:00
+- **Commit/PR**: `178a87d49`, PR #114
+- **Notes**: Added the missing `nil` referral client argument and pushed the correction for remote CI validation; no local compile, build, or test was run.
+
+---

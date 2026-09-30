@@ -35,6 +35,7 @@ const (
 	openaiQuotaSecFetchMode     = "no-cors"
 	openaiQuotaSecFetchDest     = "empty"
 	openaiQuotaResetCreditsKey  = "codex_reset_credit_snapshot"
+	openaiQuotaCreditsKey       = "codex_credits_snapshot"
 )
 
 // OpenAIRateLimitWindow describes a single rate-limit window returned by
@@ -75,6 +76,21 @@ type OpenAIRateLimitResetCredits struct {
 	Credits        []OpenAIRateLimitResetCreditDetail `json:"credits,omitempty"`
 }
 
+// OpenAICredits is the spendable Codex credit balance from /wham/usage.
+// It is separate from reset credits. Upstream represents the balance as a
+// nullable decimal string; keep that representation to preserve precision.
+// Source: Codex 41ece455b7fa, codex-backend-openapi-models/src/models/credit_status_details.rs.
+type OpenAICredits struct {
+	HasCredits bool    `json:"has_credits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance"`
+}
+
+type openAICreditsSnapshot struct {
+	Credits   *OpenAICredits `json:"credits"`
+	FetchedAt int64          `json:"fetched_at"`
+}
+
 // OpenAIQuotaUsage is the typed projection of /wham/usage we expose to the UI.
 // Fields not relevant to the quota card are intentionally omitted to keep the
 // surface narrow; full upstream payload preservation is unnecessary.
@@ -86,6 +102,7 @@ type OpenAIQuotaUsage struct {
 	RateLimit             *OpenAIRateLimit             `json:"rate_limit,omitempty"`
 	AdditionalRateLimits  []OpenAIAdditionalRateLimit  `json:"additional_rate_limits,omitempty"`
 	RateLimitResetCredits *OpenAIRateLimitResetCredits `json:"rate_limit_reset_credits,omitempty"`
+	Credits               *OpenAICredits               `json:"credits,omitempty"`
 	FetchedAt             int64                        `json:"fetched_at"`
 	autoResetCandidates   []openAIAutoResetCreditCandidate
 }
@@ -119,6 +136,9 @@ type OpenAIQuotaService struct {
 	proxyRepo            ProxyRepository
 	tokenProvider        *OpenAITokenProvider
 	privacyClientFactory PrivacyClientFactory
+	referralClient       OpenAIReferralClient
+	tempUnschedCache     TempUnschedCache
+	runtimeBlocker       AccountRuntimeBlocker
 	agentIdentityTaskMu  sync.Mutex
 	agentIdentityWS      agentIdentityWSConnectionInvalidator
 }
@@ -131,12 +151,14 @@ func NewOpenAIQuotaService(
 	proxyRepo ProxyRepository,
 	tokenProvider *OpenAITokenProvider,
 	privacyClientFactory PrivacyClientFactory,
+	referralClient OpenAIReferralClient,
 ) *OpenAIQuotaService {
 	return &OpenAIQuotaService{
 		accountRepo:          accountRepo,
 		proxyRepo:            proxyRepo,
 		tokenProvider:        tokenProvider,
 		privacyClientFactory: privacyClientFactory,
+		referralClient:       referralClient,
 	}
 }
 
@@ -210,6 +232,9 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
 		}
 	}
+	if openAIQuotaIsFullyAvailable(&payload) {
+		s.clearQuotaRuntimeStateBestEffort(ctx, accountID, "quota_query", false)
+	}
 	return &payload, nil
 }
 
@@ -228,16 +253,36 @@ func (s *OpenAIQuotaService) CacheResetCreditsSnapshot(ctx context.Context, acco
 	return s.cacheResetCreditsSnapshot(ctx, accountID, credits, nil)
 }
 
+// CacheCreditsSnapshot stores the queried row's display snapshot independently
+// of reset-credit expiration details. A successful read with absent credits
+// replaces the previous balance with unknown, never with a fabricated zero.
+func (s *OpenAIQuotaService) CacheCreditsSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
+	if usage == nil {
+		return infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_EMPTY_USAGE", "openai quota query returned an empty result")
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
+		openaiQuotaCreditsKey: openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt},
+	}); err != nil {
+		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache Codex credits").WithCause(err)
+	}
+	return nil
+}
+
 // CachePostResetSnapshot persists the credits and usage windows observed after a reset.
 func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, accountID int64, usage *OpenAIQuotaUsage) error {
 	if usage == nil {
 		return s.cacheResetCreditsSnapshot(ctx, accountID, nil, nil)
 	}
+	updates := buildOpenAIAutoResetUsageUpdates(usage, time.Now())
+	if updates == nil {
+		updates = make(map[string]any)
+	}
+	updates[openaiQuotaCreditsKey] = openAICreditsSnapshot{Credits: usage.Credits, FetchedAt: usage.FetchedAt}
 	return s.cacheResetCreditsSnapshot(
 		ctx,
 		accountID,
 		usage.RateLimitResetCredits,
-		buildOpenAIAutoResetUsageUpdates(usage, time.Now()),
+		updates,
 	)
 }
 
@@ -261,6 +306,63 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 		).WithCause(err)
 	}
 	return nil
+}
+
+func openAIQuotaIsFullyAvailable(usage *OpenAIQuotaUsage) bool {
+	if usage == nil || usage.RateLimit == nil || !usage.RateLimit.Allowed || usage.RateLimit.LimitReached {
+		return false
+	}
+	for i := range usage.AdditionalRateLimits {
+		rateLimit := usage.AdditionalRateLimits[i].RateLimit
+		if rateLimit != nil && (!rateLimit.Allowed || rateLimit.LimitReached) {
+			return false
+		}
+	}
+	return true
+}
+
+// clearQuotaRuntimeStateBestEffort reconciles only account-wide runtime state.
+// Model-specific limits may describe permanent plan/model restrictions, so a
+// successful global quota query must never erase them.
+func (s *OpenAIQuotaService) clearQuotaRuntimeStateBestEffort(ctx context.Context, accountID int64, source string, force bool) {
+	if s == nil || s.accountRepo == nil {
+		return
+	}
+
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		slog.Warn("openai_quota_runtime_state_load_failed", "account_id", accountID, "source", source, "error", err)
+		return
+	}
+
+	clearRateLimit := force || account.RateLimitedAt != nil || account.RateLimitResetAt != nil || account.OverloadUntil != nil
+	clearTempUnschedulable := force || account.TempUnschedulableUntil != nil
+	cleared := true
+	if clearRateLimit {
+		if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
+			cleared = false
+			slog.Warn("openai_quota_clear_rate_limit_failed", "account_id", accountID, "source", source, "error", err)
+		}
+	}
+	if clearTempUnschedulable {
+		if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
+			cleared = false
+			slog.Warn("openai_quota_clear_temp_unschedulable_failed", "account_id", accountID, "source", source, "error", err)
+		} else if s.tempUnschedCache != nil {
+			if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
+				slog.Warn("openai_quota_clear_temp_unschedulable_cache_failed", "account_id", accountID, "source", source, "error", err)
+			}
+		}
+	}
+	if !cleared {
+		return
+	}
+	if s.runtimeBlocker != nil {
+		s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
+	}
+	if clearRateLimit || clearTempUnschedulable {
+		slog.Info("openai_quota_runtime_state_cleared", "account_id", accountID, "source", source)
+	}
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, client *req.Client, accessToken, chatGPTAccountID string, fedRAMP bool, accountID int64) *openAIRateLimitResetCreditDetails {
@@ -395,6 +497,10 @@ func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, c
 		"code", payload.Code,
 		"windows_reset", payload.WindowsReset,
 	)
+	// The upstream reset credit only changes OpenAI's quota window. Reconcile
+	// account-wide scheduler state as part of the same successful action. This
+	// remains best-effort because the credit has already been consumed.
+	s.clearQuotaRuntimeStateBestEffort(ctx, accountID, "reset_credit", true)
 	return &payload, nil
 }
 
