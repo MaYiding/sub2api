@@ -26,13 +26,24 @@ if not str(s).startswith('/var/lib/') or s==Path('/var/lib'):
 print(s)
 PY
 )
+# The application container writes as UID 1000. The host's matching account
+# may have a different primary GID (for example a cloud image's admin group).
+if ! getent passwd 1000 >/dev/null; then
+  if getent passwd sub2api-ai-log >/dev/null; then
+    echo "sub2api-ai-log already exists with another UID; resolve the UID 1000 mapping first" >&2
+    exit 2
+  fi
+  useradd --uid 1000 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sub2api-ai-log
+fi
+SHIPPER_GID=$(getent passwd 1000 | cut -d: -f4)
+getent group "$SHIPPER_GID" >/dev/null
 install -d -m 0755 /opt/sub2api-ai-log
-install -d -m 0700 -o 1000 -g 1000 "$SPOOL"
-install -d -m 0700 -o 1000 -g 1000 /etc/sub2api-ai-log
+install -d -m 0700 -o 1000 -g "$SHIPPER_GID" "$SPOOL"
+install -d -m 0700 -o 1000 -g "$SHIPPER_GID" /etc/sub2api-ai-log
 if [[ "$CONFIG" != /etc/sub2api-ai-log/shipper.json ]]; then
-  install -m 0600 -o 1000 -g 1000 "$CONFIG" /etc/sub2api-ai-log/shipper.json
+  install -m 0600 -o 1000 -g "$SHIPPER_GID" "$CONFIG" /etc/sub2api-ai-log/shipper.json
 else
-  chown 1000:1000 "$CONFIG"
+  chown "1000:$SHIPPER_GID" "$CONFIG"
   chmod 0600 "$CONFIG"
 fi
 install -m 0644 "$ROOT/tools/ai-log-pipeline/shipper.py" /opt/sub2api-ai-log/shipper.py
@@ -46,7 +57,7 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 [Service]
 User=1000
-Group=1000
+Group=$SHIPPER_GID
 ExecStart=/opt/sub2api-ai-log/venv/bin/python /opt/sub2api-ai-log/shipper.py --config /etc/sub2api-ai-log/shipper.json
 Restart=on-failure
 RestartSec=5

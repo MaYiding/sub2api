@@ -49,6 +49,8 @@ Create a mode-0600 shipper JSON configuration outside Git:
 On an Ubuntu host with Python 3 and venv support, run
 `sudo deploy/install-ai-log-shipper.sh /absolute/private/shipper.json`.
 This installs a wheel-only Python runtime and a restarting systemd service.
+The service uses host UID 1000 and that account’s actual primary group; if UID
+1000 is unused, the installer creates a dedicated non-login account.
 The configuration uses the **host** spool path, while the app container sees
 the shared mount at `/app/ai-log-spool`. Use normal CA verification; the public
 listener uses SASL/SCRAM over TLS. The ingest principal can write only its raw
