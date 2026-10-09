@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -103,4 +104,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify WAL delivery and retry behavior
+        run: python -m pip install --require-hashes -r tools/ai-log-pipeline/requirements-linux-amd64-py312.lock
+      - name: Verify lossless archives and failure recovery
         run: python -m unittest discover -s tools/ai-log-pipeline -p 'test_*.py'

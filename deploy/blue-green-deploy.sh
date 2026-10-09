@@ -171,16 +171,43 @@ stage_data() {
 }
 
 build_env_args() {
-  local env_value
+  local env_value active_capture_enabled="" active_capture_source="" active_capture_max=""
   ENV_ARGS=()
   while IFS= read -r env_value; do
     [[ -n "$env_value" ]] || continue
     case "$env_value" in
       SERVER_HOST=*|SERVER_PORT=*) continue ;;
+      AI_LOG_ENABLED=*) active_capture_enabled="${env_value#*=}"; continue ;;
+      AI_LOG_SOURCE_ID=*) active_capture_source="${env_value#*=}"; continue ;;
+      AI_LOG_SPOOL_MAX_BYTES=*) active_capture_max="${env_value#*=}"; continue ;;
+      AI_LOG_SPOOL_DIR=*) continue ;;
     esac
     ENV_ARGS+=(--env "$env_value")
   done < <(docker_inspect_value "$ACTIVE_CONTAINER" '{{range .Config.Env}}{{println .}}{{end}}')
   ENV_ARGS+=(--env SERVER_HOST=0.0.0.0 --env SERVER_PORT=8080)
+  local capture_enabled="${AI_LOG_ENABLED:-$active_capture_enabled}"
+  local capture_source="${AI_LOG_SOURCE_ID:-$active_capture_source}"
+  local capture_max="${AI_LOG_SPOOL_MAX_BYTES:-$active_capture_max}"
+  if [[ -n "$capture_enabled" ]]; then
+    [[ "$capture_enabled" == true || "$capture_enabled" == false ]] || die "AI_LOG_ENABLED must be true or false"
+    ENV_ARGS+=(--env "AI_LOG_ENABLED=$capture_enabled")
+  fi
+  if [[ -n "$capture_source" ]]; then
+    ENV_ARGS+=(--env "AI_LOG_SOURCE_ID=$capture_source")
+  fi
+  if [[ -n "$capture_max" ]]; then
+    ENV_ARGS+=(--env "AI_LOG_SPOOL_MAX_BYTES=$capture_max")
+  fi
+  if [[ "$capture_enabled" == true ]]; then
+    local capture_spool="${SUB2API_AI_LOG_SPOOL_HOST_DIR:-}"
+    if [[ -z "$capture_spool" ]]; then
+      capture_spool="$(docker_inspect_value "$ACTIVE_CONTAINER" '{{range .Mounts}}{{if eq .Destination "/app/ai-log-spool"}}{{.Source}}{{end}}{{end}}')"
+    fi
+    [[ -n "$capture_source" ]] || die "AI_LOG_SOURCE_ID is required when capture is enabled"
+    [[ "$capture_spool" == /* && -d "$capture_spool" && ! -L "$capture_spool" ]] || die "SUB2API_AI_LOG_SPOOL_HOST_DIR must be an existing absolute directory"
+    [[ "$capture_spool" != "$ACTIVE_DATA_DIR" && "$capture_spool" != "$ACTIVE_DATA_DIR/"* && "$capture_spool" != "$STAGING_ROOT" && "$capture_spool" != "$STAGING_ROOT/"* ]] || die "AI log spool must be outside staged app data"
+    ENV_ARGS+=(--env AI_LOG_SPOOL_DIR=/app/ai-log-spool --volume "$capture_spool:/app/ai-log-spool:z")
+  fi
 }
 
 start_candidate() {

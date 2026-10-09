@@ -22,6 +22,17 @@ spool with the same UID, and give both blue/green app containers the same source
 ID. Backlog remains usable across deployments. Never remove the spool during a
 blue/green rollout.
 
+For the first rollout with the included blue/green script, prepare a private
+UID-1000 directory outside its staged app data, then set these deployment-shell
+variables. The script carries the shared mount and source settings forward on
+subsequent rollouts; `AI_LOG_ENABLED=false` disables capture on rollback.
+
+```sh
+AI_LOG_ENABLED=true AI_LOG_SOURCE_ID=sub2api-production \
+SUB2API_AI_LOG_SPOOL_HOST_DIR=/var/lib/sub2api-ai-log/spool \
+./blue-green-deploy.sh YOUR_PREBUILT_IMAGE
+```
+
 Create a mode-0600 shipper JSON configuration outside Git:
 
 ```json

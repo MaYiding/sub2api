@@ -102,6 +102,10 @@ def main():
         raise ValueError('shipper config must be mode 0600')
     config = json.loads(config_path.read_text())
     spool = Path(config['spool_dir']).resolve(strict=True)
+    # Hold this descriptor for the process lifetime. Two shippers could
+    # otherwise reorder segments of the same capture across Kafka partitions.
+    lock_fd = os.open(spool / '.shipper.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     producer = Producer(producer_config(config))
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     def stop(_signal, _frame):
@@ -131,7 +135,9 @@ def main():
                 # Exception strings can include broker URLs. Report only type.
                 LOG.error('segment_delivery_failed file=%s class=%s', path.name, type(error).__name__)
                 time.sleep(1)
-                if failed >= 3:
+                # Invalid local files must remain recoverable without starving
+                # healthy files. Broker/network failures should back off.
+                if failed >= 3 and not isinstance(error, (ValueError, json.JSONDecodeError)):
                     break
         now = time.time()
         if now-last_report >= 30:

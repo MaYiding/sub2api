@@ -27,6 +27,8 @@ type WAL struct {
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+	closed    atomic.Bool
+	submitMu  sync.RWMutex
 }
 
 var defaultOnce sync.Once
@@ -86,6 +88,11 @@ func NewWAL(dir string, maxBytes int64) (*WAL, error) {
 		return nil, err
 	}
 	name := f.Name()
+	if err := lockFile(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return nil, err
+	}
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
@@ -98,6 +105,11 @@ func NewWAL(dir string, maxBytes int64) (*WAL, error) {
 
 func (w *WAL) Submit(e Event) bool {
 	if w == nil {
+		return false
+	}
+	w.submitMu.RLock()
+	defer w.submitMu.RUnlock()
+	if w.closed.Load() {
 		return false
 	}
 	b, err := json.Marshal(e)
@@ -124,8 +136,20 @@ func (w *WAL) Submit(e Event) bool {
 }
 
 func (w *WAL) Close() {
-	w.closeOnce.Do(func() { close(w.stop) })
+	w.closeOnce.Do(func() {
+		w.submitMu.Lock()
+		w.closed.Store(true)
+		close(w.stop)
+		w.submitMu.Unlock()
+	})
 	<-w.done
+}
+
+// Shutdown drains the default WAL after the HTTP server and app services stop.
+func Shutdown() {
+	if defaultWAL != nil {
+		defaultWAL.Close()
+	}
 }
 
 func (w *WAL) diskUsage() (int64, error) {
