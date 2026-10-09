@@ -6,10 +6,12 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
 	"io"
 	"log/slog"
 	"net"
@@ -388,7 +390,7 @@ func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	clone.Transport = &grokAccessDeniedFallbackTransport{base: base}
+	clone.Transport = &grokAccessDeniedFallbackTransport{base: &ailog.Transport{Base: base}}
 	return &clone
 }
 

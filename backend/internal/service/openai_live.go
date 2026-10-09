@@ -3,11 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
 	"io"
 	"net/http"
 	"net/url"
@@ -531,6 +533,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 				errCh <- readErr
 				return
 			}
+			ailog.FromContext(proxyCtx).Record("ws.client", payload, map[string]any{"message_type": int(messageType)})
 			if writeErr := upstream.WriteFrame(proxyCtx, messageType, payload); writeErr != nil {
 				errCh <- writeErr
 				return
@@ -544,7 +547,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 				errCh <- liveSidebandReadError(readErr)
 				return
 			}
-			if writeErr := downstream.Write(proxyCtx, messageType, payload); writeErr != nil {
+			if writeErr := WriteOpenAIWSClientMessage(proxyCtx, downstream, messageType, payload); writeErr != nil {
 				errCh <- writeErr
 				return
 			}

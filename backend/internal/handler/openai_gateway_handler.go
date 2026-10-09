@@ -4050,7 +4050,7 @@ func writeContentModerationWSError(ctx context.Context, conn *coderws.Conn, deci
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	_ = conn.Write(writeCtx, coderws.MessageText, payload)
+	_ = service.WriteOpenAIWSClientMessage(writeCtx, conn, coderws.MessageText, payload)
 }
 
 // writeCyberSessionBlockedWSError sends an error frame telling the client this
@@ -4076,7 +4076,7 @@ func writeCyberSessionBlockedWSError(ctx context.Context, conn *coderws.Conn) {
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	_ = conn.Write(writeCtx, coderws.MessageText, payload)
+	_ = service.WriteOpenAIWSClientMessage(writeCtx, conn, coderws.MessageText, payload)
 }
 
 // cyberPolicyRecordedKey guards against double-firing recordCyberPolicyIfMarked

@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+
 	"encoding/json"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -220,7 +222,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 			if grokRealtimeEventHasAudio(msg) {
 				audioObserved.Store(true)
 			}
-			if writeErr := client.Write(ctx, coderws.MessageText, msg); writeErr != nil {
+			if writeErr := WriteOpenAIWSClientMessage(ctx, client, coderws.MessageText, msg); writeErr != nil {
 				errCh <- writeErr
 				return
 			}
@@ -235,6 +237,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 				errCh <- readErr
 				return
 			}
+			ailog.FromContext(ctx).Record("ws.client", msg, map[string]any{"message_type": int(kind)})
 			if kind != coderws.MessageText && kind != coderws.MessageBinary {
 				continue
 			}
