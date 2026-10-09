@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 
 LOG = logging.getLogger('ai-log-pipeline')
 
@@ -72,5 +73,8 @@ def ch_insert(config, table, rows):
     if table not in {'events', 'archive_catalog', 'archive_segments'}:
         raise ValueError('unknown table')
     if rows:
+        database = config['clickhouse'].get('database', 'ai_logs')
+        if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', database) is None:
+            raise ValueError('invalid database identifier')
         data = b'\n'.join(json.dumps(row, separators=(',', ':')).encode() for row in rows)
-        ch_request(config, 'INSERT INTO ai_logs.'+table+' FORMAT JSONEachRow', data)
+        ch_request(config, 'INSERT INTO `'+database+'`.'+table+' FORMAT JSONEachRow', data)

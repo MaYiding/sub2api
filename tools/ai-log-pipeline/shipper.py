@@ -65,9 +65,9 @@ def ship_segment(path, producer, topic, source_id):
                 # complete prefix. Never silently truncate an interrupted WAL.
                 raise ValueError('incomplete or oversized WAL line')
             event = json.loads(line)
-            if event.get('schema_version') != 1 or event.get('source_id') != source_id:
+            if not isinstance(event, dict) or event.get('schema_version') != 1 or event.get('source_id') != source_id:
                 raise ValueError('WAL schema/source mismatch')
-            if not event.get('event_id') or not event.get('capture_id'):
+            if any(not isinstance(event.get(key), str) or not event[key] for key in ('event_id', 'capture_id')):
                 raise ValueError('missing event identity')
             key = (source_id + ':' + event['capture_id']).encode()
             while True:
@@ -114,6 +114,7 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     delivered, last_report = 0, 0.0
+    invalid_segments = {}
     while not STOP:
         failed, pending, oldest = 0, 0, time.time()
         # A flat, task-owned spool only; never follow symlinks or recurse.
@@ -127,6 +128,10 @@ def main():
                     continue
                 pending += info.st_size
                 oldest = min(oldest, info.st_mtime)
+                fingerprint = (info.st_ino, info.st_mtime_ns, info.st_size)
+                if invalid_segments.get(path.name) == fingerprint:
+                    failed += 1
+                    continue
                 delivered += ship_segment(path, producer, config['topic'], config['source_id'])
             except FileNotFoundError:
                 continue
@@ -134,11 +139,18 @@ def main():
                 failed += 1
                 # Exception strings can include broker URLs. Report only type.
                 LOG.error('segment_delivery_failed file=%s class=%s', path.name, type(error).__name__)
+                if isinstance(error, ValueError):
+                    # Keep the bytes and the failure visible, but do not resend
+                    # a corrupt file's valid prefix on every polling cycle.
+                    # An operator repair (inode/size/mtime change) permits retry.
+                    invalid_segments[path.name] = fingerprint
                 time.sleep(1)
                 # Invalid local files must remain recoverable without starving
                 # healthy files. Broker/network failures should back off.
                 if failed >= 3 and not isinstance(error, (ValueError, json.JSONDecodeError)):
                     break
+        present = {path.name for path in entries}
+        invalid_segments = {name: value for name, value in invalid_segments.items() if name in present}
         now = time.time()
         if now-last_report >= 30:
             stats = {'delivered_events': delivered, 'pending_bytes': pending, 'oldest_age_seconds': int(now-oldest), 'failures': failed, 'updated_at': int(now)}

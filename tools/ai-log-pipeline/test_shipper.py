@@ -69,6 +69,14 @@ class ShipperTests(unittest.TestCase):
         with self.assertRaises(OSError):
             shipper.ship_segment(link, Producer(), 'raw', 'source')
 
+    def test_invalid_json_shapes_remain_recoverable(self):
+        for value in ([], None, dict(self.event, capture_id=23)):
+            with self.subTest(value=value):
+                self.path.write_text(json.dumps(value)+'\n')
+                with self.assertRaises(ValueError):
+                    shipper.ship_segment(self.path, Producer(), 'raw', 'source')
+                self.assertTrue(self.path.exists())
+
     def test_tls_and_idempotence_cannot_be_disabled_by_config(self):
         config = shipper.producer_config({'bootstrap_servers': 'example:443', 'username': 'user', 'password': 'private', 'source_id': 'source', 'security.protocol': 'PLAINTEXT'})
         self.assertEqual(config['security.protocol'], 'SASL_SSL')

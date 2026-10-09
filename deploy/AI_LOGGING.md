@@ -37,18 +37,20 @@ Create a mode-0600 shipper JSON configuration outside Git:
 
 ```json
 {
-  "bootstrap_servers": "kafka.infra.qingtianji.com:443",
+  "bootstrap_servers": "broker-1.kafka.infra.qingtianji.com:443,broker-2.kafka.infra.qingtianji.com:443,broker-3.kafka.infra.qingtianji.com:443",
   "username": "ingest-default",
   "password": "REPLACE_FROM_PRIVATE_CONNECTION_BUNDLE",
   "topic": "ai.raw.default.v1",
   "source_id": "sub2api-production",
-  "spool_dir": "/app/ai-log-spool"
+  "spool_dir": "/var/lib/sub2api-ai-log/spool"
 }
 ```
 
-Install `confluent-kafka==2.12.0` into a Python 3.12 venv from a prebuilt wheel,
-then run `tools/ai-log-pipeline/shipper.py --config /etc/sub2api-ai-log/shipper.json`
-under a restarting systemd service. Use normal CA verification; the public
+On an Ubuntu host with Python 3 and venv support, run
+`sudo deploy/install-ai-log-shipper.sh /absolute/private/shipper.json`.
+This installs a wheel-only Python runtime and a restarting systemd service.
+The configuration uses the **host** spool path, while the app container sees
+the shared mount at `/app/ai-log-spool`. Use normal CA verification; the public
 listener uses SASL/SCRAM over TLS. The ingest principal can write only its raw
 topic. Credentials are not included in this repository.
 
@@ -77,7 +79,8 @@ topic. Credentials are not included in this repository.
 
 Inference does not wait for Kafka or WAN connectivity. A bounded 32 MiB memory
 queue feeds a local WAL, fsynced and rotated every second or 4 MiB. A process or
-host crash can lose the unsynced tail (normally up to one second); capture is
+host crash can lose the in-memory queue and unsynced tail (the healthy flush
+target is one second); capture is
 **not a zero-loss transactional prerequisite for inference**.
 
 The shipper deletes a segment only after all Kafka delivery callbacks succeed.
@@ -93,6 +96,14 @@ one-day guarantee at 50–100 GB/day; resize for the measured compressed traffic
 and outage window. Recording both relay boundaries and retries increases raw
 traffic; archival compression can remove repeated content, but Kafka capacity
 must be measured independently.
+
+Only one shipper can hold the spool's process lock. A malformed or interrupted
+segment is retained and logged; healthy segments continue to drain. Recover the
+complete prefix with stable event IDs and explicitly record any damaged tail
+before moving the original out of the spool. Never silently delete a bad file.
+
+Backend storage, catalog recovery and retention are documented in
+[`tools/ai-log-pipeline/README.md`](../tools/ai-log-pipeline/README.md).
 
 ## Rollout
 
