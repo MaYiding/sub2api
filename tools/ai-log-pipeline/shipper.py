@@ -106,7 +106,12 @@ def main():
     # otherwise reorder segments of the same capture across Kafka partitions.
     lock_fd = os.open(spool / '.shipper.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    from shipper_control import Heartbeat, prepare_probe
+    instance = prepare_probe(config, spool)
+    heartbeat = Heartbeat(config, spool, instance) if instance else None
     producer = Producer(producer_config(config))
+    if heartbeat:
+        heartbeat.thread.start()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     def stop(_signal, _frame):
         global STOP
@@ -132,7 +137,10 @@ def main():
                 if invalid_segments.get(path.name) == fingerprint:
                     failed += 1
                     continue
-                delivered += ship_segment(path, producer, config['topic'], config['source_id'])
+                count = ship_segment(path, producer, config['topic'], config['source_id'])
+                delivered += count
+                if heartbeat and count:
+                    heartbeat.update(delivered_events=delivered, last_delivery_at=int(time.time()))
             except FileNotFoundError:
                 continue
             except Exception as error:
@@ -151,6 +159,8 @@ def main():
                     break
         present = {path.name for path in entries}
         invalid_segments = {name: value for name, value in invalid_segments.items() if name in present}
+        if heartbeat:
+            heartbeat.update(failures=failed)
         now = time.time()
         if now-last_report >= 30:
             stats = {'delivered_events': delivered, 'pending_bytes': pending, 'oldest_age_seconds': int(now-oldest), 'failures': failed, 'updated_at': int(now)}
@@ -162,6 +172,8 @@ def main():
             last_report = now
         time.sleep(1)
     producer.flush(15)
+    if heartbeat:
+        heartbeat.close()
 
 
 if __name__ == '__main__':

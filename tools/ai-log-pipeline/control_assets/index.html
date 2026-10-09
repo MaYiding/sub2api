@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 日志 · 来源接入</title><link rel="stylesheet" href="/admin/assets/app.css"><script src="/admin/assets/app.js" defer></script></head>
+<body><header><div><p class="eyebrow">AI 日志平台</p><h1>来源接入</h1><p>独立身份上报，统一存储与回放。</p></div><button id="logout" hidden>退出登录</button></header>
+<main><div id="notice" role="status" aria-live="polite"></div>
+<section id="login-panel"><h2>管理员登录</h2><p>需要内网或 VPN 连接。这里的账号用于日志平台管理。</p><form id="login"><label>账号<input name="username" value="admin" autocomplete="username" required></label><label>密码<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">登录</button></form></section>
+<div id="workspace" hidden><section class="intro"><h2>每台服务器一个来源</h2><p>来源 ID 在改名、蓝绿发布和密钥轮换后保持不变。配置包含私密凭据，请只安装到对应服务器。</p><p id="capacity"></p></section>
+<section><details><summary>注册新来源</summary><form id="create"><div class="form-grid"><label>名称<input name="name" maxlength="128" placeholder="例如：武汉机房中转站" required></label><label>地域或服务器备注<input name="region" maxlength="128"></label><label>环境<input name="environment" value="production" maxlength="128" required></label><label>原始日志缓冲额度（GiB）<input name="retention_gib" type="number" min="6" max="384" value="96" required></label></div><button type="submit">注册并生成凭据</button></form></details></section>
+<div class="section-title"><h2>已注册来源</h2><button id="refresh">刷新</button></div><div id="sources"></div>
+<section><h2>接入步骤</h2><ol><li>等待来源显示“配置可领取”，下载该来源的配置包，并在服务器上保存为 0600 权限。</li><li>在 Sub2API 仓库根目录运行 <code>sudo deploy/install-ai-log-shipper.sh /私密路径/shipper.json</code>。</li><li>按安装器输出的 source_id 配置 Sub2API，挂载共享 WAL，再进行蓝绿发布。</li><li>确认心跳、Kafka 测试、HDD 回放均成功，再检查真实业务请求。</li></ol><p>轮换时领取新配置并重新运行安装器；确认新凭据对应的 HDD 探测通过后，再点击“确认轮换”。停用会拒绝写入，源端 WAL 会积压，历史日志保留。</p></section>
+<section><details><summary>近期操作审计</summary><button id="load-audit">刷新审计</button><pre id="audit"></pre></details></section></div></main><footer>上报账号不能读取日志。来源以服务端注册绑定为准。</footer></body></html>

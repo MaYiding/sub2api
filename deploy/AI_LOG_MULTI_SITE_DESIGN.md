@@ -1,193 +1,119 @@
-# Sub2API 多站点日志接入管理设计
+# Sub2API 多来源日志接入
 
-状态：待实施方案，2026-10-09。当前分支已有 WAL、Kafka 上报和日志后端；本方案中的中央注册页、自动凭据管理、来源绑定和心跳功能尚未实现。两个部署合计每天 50–100 GB 压缩前日志，共用现有 Kafka、清洗、ClickHouse 和 HDD R6 归档。
+2026-10-09：第一阶段已实现，中央服务部署在 VM624。两个部署合计每天 50–100 GB 压缩前日志，共用 Kafka、清洗服务、ClickHouse 和 HDD R6 归档。公网 Sub2API 的实际安装和蓝绿发布仍需按各站点配置执行。
 
-采用中央注册、每个部署独立身份和凭据、每个来源独立 raw Topic。清洗后汇入同一个组织的 clean Topic，保留来源字段；管理员可以合并查询或按站点筛选。两个站点运行同一份 Sub2API 镜像，差异只在接入配置。
+入口为 `https://logs.kafka.infra.qingtianji.com/admin/sources`，需要内网或 VPN，并使用独立的日志平台管理员账号。两地运行同一个分支；差异是 source_id、Kafka 账号、原始 Topic 和心跳 token。历史[架构参考图](ai-log-multi-site.drawio)保留供编辑。
 
-[可编辑架构图](ai-log-multi-site.drawio)。
+## 注册与接入
 
-## 使用方式
+1. 管理员登记名称、地域备注、环境和原始日志缓冲额度。系统生成固定的 `src-<12 位随机十六进制>` 来源 ID。
+2. 后台建立 6 分区、RF=3、minISR=2 的独立 raw Topic，生成 SCRAM-SHA-512 账号，配置精确 ACL、发送速率配额和清洗绑定。
+3. 清洗器确认加载绑定后，配置包才可领取。并发注册时，尚未建好 Topic/ACL 的来源不会进入订阅集合。
+4. 下载本站的 `shipper.json`，设置 0600 权限，在对应宿主机执行 `sudo deploy/install-ai-log-shipper.sh /absolute/private/shipper.json`。
+5. 按安装器输出给 Sub2API 配置 `AI_LOG_SOURCE_ID`，启用 `AI_LOG_ENABLED=true` 并挂载共享本地 WAL，再执行[蓝绿发布](AI_LOGGING.md)。
+6. 检查实际站点心跳、发送确认及 HDD 回放，然后用真实业务请求验收。
 
-中央日志平台增加“来源接入”页面，拟用现有日志域名的 `/admin/sources` 路径；该路径尚未开放。管理员通过内网或 VPN 和管理员身份登录，分别创建“站点 A”“站点 B”。名称和地域只是显示信息，系统生成不可变的 source_id。
+一个独立 shipper 对应一个来源。单台服务器的蓝绿容器共享该来源 ID 和本地 WAL；不同服务器不得共用配置包或 WAL。改名、换凭据、停用后重新启用都保持 source_id 和 Topic 不变。
 
-创建表单包含名称、环境、地域标签、预计日流量、告警阈值。后台完成 Topic、账号、ACL、配额和清洗绑定后，页面才显示“可安装”，提供该来源独有的私密 `shipper.json` 配置包及安装说明。第一版使用配置包安装，避免让浏览器直接管理宿主机服务；后续再增加一次性接入码的一键注册。
+页面提供注册、状态、配置下载、改名、生成下一代凭据、确认或取消轮换、停用、重新启用以及操作审计。心跳在线、源端 Kafka 发送确认和中央 HDD 回放验证分别展示。已验证表示该凭据曾完成端到端探测，**不表示此刻在线，也不证明公网生产实例已经发布**；需同时核对心跳及上报主机。
 
-在各站点宿主机安装 shipper，挂载该站点本地 WAL，并把生成的 source_id 配置给 Sub2API。两地使用同一套安装脚本和代码；不能复制共用密码，也不跨地点共享 WAL。一个站点的蓝绿容器共享该站点的 source_id 和本地 WAL，仍由一个 shipper 发送。
+## 消费者如何判定来源
 
-接入管理页展示“配置已生成、已收到心跳、Kafka 测试通过、已归档验证”四个独立进度。只有专用合成事件已经从 HDD 回放核对，才标为“已接通”；仅有心跳或 TCP 连接不能证明日志存储成功。
+普通 Kafka 消息不会自动携带其生产者认证身份。客户端声明的 `source_id` 或 `client.id` 不能独立作为证明。实际可信链是：
 
-| 项目 | 站点 A 示例 | 站点 B 示例 |
-|---|---|---|
-| 显示名称 | 站点 A | 站点 B |
-| 所属组织 | default | default |
-| 固定 source_id | src-a1 | src-b1 |
-| Kafka 用户 | ingest-src-a1-g1 | ingest-src-b1-g1 |
-| Kafka 密码 | 单独随机生成 | 单独随机生成 |
-| 原始 Topic | ai.raw.src-a1.v1 | ai.raw.src-b1.v1 |
-| 清洗后 Topic | ai.clean.default.v1 | ai.clean.default.v1 |
-| 心跳凭据 | A 专属，只可报 A 状态 | B 专属，只可报 B 状态 |
-| 存储与查询 | 共用后端，保留 source_id | 共用后端，保留 source_id |
+`SCRAM 用户 → 精确 raw Topic ACL → 中央来源绑定 → 清洗事件来源字段`
 
-表中的 ID、用户名和站点名称仅为示例，不是真实创建的账号。首次生成后 source_id 不随改名或换密钥改变。未来一个地点增加独立上报机器时，为每个独立 shipper 分配凭据和来源，可用相同 site 标签分组；不要把多台机器克隆成同一个上报身份。
+账号只能写自己的 `ai.raw.src-<id>.v1`，不能创建或读取 Topic，不能写其他来源、clean、DLQ 或 receipts。权限通过 Kafka 自带管理工具执行，管理证书留在内网 broker 的受限 helper 上。[Kafka ACL 文档](https://kafka.apache.org/41/security/authorization-and-acls/)
 
-## 注册与状态页面
+清洗服务校验请求声明的 source_id 与注册 Topic 一致；不一致则进入 DLQ，保留待修复的原始记录。合法事件由服务端写入以下字段，忽略客户端伪造的同名来源属性：
 
-来源列表列出名称、地域、状态、最近心跳、最近 Kafka 接收、最近归档、今日原始/归档字节、WAL 积压、当前凭据代次。空闲但心跳正常与心跳失联分别显示，避免把没有业务流量当作故障。
-
-来源详情提供连接信息、配置包领取、配置版本、测试上报结果、凭据轮换、停用上报、操作审计。界面显示凭据标识和创建时间，不回显旧密码。数据库中的 source_id 与 Topic 归属不可直接编辑；改名只改变显示标签。
-
-Sub2API 后台可增加“系统设置 → AI 日志”状态页，展示本站 source_id、采集状态、最近上报、积压与丢失计数。首版以读取无秘密状态文件为主，源端安装和激活仍走宿主机脚本。当前 AI_LOG_* 来自启动环境，界面不得假装修改后即时生效：首次接入或修改采集开关，要走现有蓝绿发布。后续若加入在线切换，再实现明确的后端动态配置接口。
-
-浏览器与 Sub2API 容器不持有 Kafka 管理权限，不挂 Docker socket，不通过 Web 请求执行宿主机 root 命令。配置包只供 shipper 使用，上游模型 API Key、Sub2API 用户 Key、Kafka 上报凭据是三个独立用途。
-
-## 身份与权限
-
-Kafka 使用现有 SASL_SSL 和 SCRAM-SHA-512，三个 broker 的 443 地址不变。每个凭据代次只对所属 raw Topic 授予必要的 Write/Describe，允许非事务幂等生产所需权限；不给 Create、Delete、Alter、Read、消费者组权限，不给 clean、DLQ 或 receipts 写权限。账号与 Topic 权限由中央后台通过 Kafka Admin API 配置。[Kafka ACL 说明](https://kafka.apache.org/41/security/authorization-and-acls/)
-
-消费者收到的普通消息体不能作为发送者身份凭证。`client.id`、payload.source_id、地域标签都可由客户端填写。因此必须形成服务端可信链：
-
-`SCRAM 用户 → 精确 Topic ACL → raw Topic 注册绑定 → tenant_id + source_id`
-
-清洗器的配置从单一 tenant 字符串升级为显式绑定：
-
-```json
-{
-  "binding_version": 2,
-  "raw_topics": {
-    "ai.raw.src-a1.v1": {"tenant_id": "default", "source_id": "src-a1"},
-    "ai.raw.src-b1.v1": {"tenant_id": "default", "source_id": "src-b1"}
-  }
-}
-```
-
-清洗器先按 Topic 取预期来源，再校验消息声明的 source_id；不一致则进入 DLQ 并告警，不能让 A 写出的消息冒充 B，也不能直接重写 ID 后悄悄接受。合格事件由服务端写入绑定身份，同时增加 raw_topic、raw_partition、raw_offset 作为追溯位置。未登记的 Topic 不订阅、不自动接纳。
-
-两地属于同一组织，所以共享 `tenant_id=default`；不同 source_id 用于身份、计量和运维。上报账号和心跳 token 都没有查询日志的权限，中央查询凭据不能放进站点配置包。
-
-当前归档包可以混合多个 source，`GET /v1/archive/{key}` 返回整个包。首版只让该组织中央管理员查询全部来源。将来若提供“站点仅查本站”的角色，必须同时加 SQL 和回放来源授权，并禁止直接下载含其他来源的原包，改为过滤导出；仅加一个 source_id 筛选框不构成权限隔离。
-
-## 凭据与配置生命周期
-
-每个来源拥有两类长期凭据：Kafka SCRAM 用户/密码用于写日志；独立的 source token 只用于本站心跳和配置确认，不得写 Kafka、读日志、创建来源或生成凭据。管理员登录凭据另外管理。
-
-Kafka 密码采用高熵随机值；短时待交付材料加密存储，密钥位于后台主机的受限配置中，与数据库分别管理。配置包领取有短有效期，禁止进入访问日志、请求日志或审计正文。领取窗口结束后清除待交付明文/密文材料；旧密码丢失走轮换流程。source token 仅存摘要用于校验。不要把密码放在 URL、命令行参数或终端输出中。
-
-轮换采用两代不同用户名：
-
-1. 创建 `ingest-src-a1-g2` 及新随机密码，仍绑定 A 的同一个 raw Topic。g1 保持可用。
-2. 生成新配置包；安装器原子替换受限配置，要求 source_id、Topic 和本地 WAL 路径保持不变。新配置校验失败则保留旧配置。
-3. shipper 切换 Producer，等待旧批次确认；结果不确定的 WAL 保留并重试。稳定 event_id 处理可能的重复，不清空 spool。
-4. 从源端使用新配置发送合成事件并收到 broker 确认，后台验证归档；首版由管理员完成“确认切换”。配置领取或普通心跳不能单独作为切换完成证据。
-5. 确认后撤销 g1 的写 ACL，再删除 g1 SCRAM 记录。默认 24 小时过渡窗口，未确认则告警并保留可见的待处理状态，不默默认为轮换成功。紧急泄漏时立即撤销旧权限，不等待平滑切换。
-
-采用独立用户名是为了允许新旧凭据重叠。Kafka 文档明确，更新 SCRAM 凭据用于后续新连接；不能仅凭修改密码就认定旧连接已断开。[Kafka SCRAM 说明](https://kafka.apache.org/41/security/authentication-using-sasl/)
-
-“停用上报”撤销该来源所有凭据代次的写权限，验证已有连接与新连接均不能写；保留历史数据和来源目录。源端会积压 WAL，页面必须显示这个影响。正常退役应先停止采集、排空 WAL、核对最后归档，再撤权；不能用删除来源来删除历史日志。
-
-首版建议 90 天轮换提醒，轮换动作与结果均入审计。SCRAM 本身没有本方案的自动到期策略；需要后台任务执行撤权，不能只在数据库里标记 expired。
-
-## 上报配置与心跳
-
-现有 shipper.json 增加可选的 control 部分，其余数据通道保持兼容：
-
-```json
-{
-  "bootstrap_servers": "broker-1.kafka.infra.qingtianji.com:443,broker-2.kafka.infra.qingtianji.com:443,broker-3.kafka.infra.qingtianji.com:443",
-  "username": "ingest-src-a1-g1",
-  "password": "GENERATED_SECRET",
-  "topic": "ai.raw.src-a1.v1",
-  "source_id": "src-a1",
-  "spool_dir": "/var/lib/sub2api-ai-log/spool",
-  "config_version": 1,
-  "credential_id": "cred-a1-g1",
-  "control": {
-    "endpoint": "https://logs.kafka.infra.qingtianji.com",
-    "source_token": "GENERATED_SCOPED_TOKEN"
-  }
-}
-```
-
-控制接口为拟新增功能。心跳每 30 秒一次、超过 120 秒标为失联，携带版本、配置代次、启动实例标识、pending_bytes、oldest_age、投递成功时间和丢失计数，不携带消息正文或秘密。token 在服务端绑定 source，不接受请求体指定其他来源。心跳使用独立、有限超时的循环，不能被 Producer 的长重试阻塞。
-
-后台同时维护服务器观察的 raw 接收时间、clean 接收时间和归档确认时间。源端报告用于诊断，不能作为计费或身份事实；后台数据才证明日志已进入链路。
-
-管理页或注册库不可用时，已有站点继续使用最后可用的本地 Kafka 配置上报。控制故障不能同步阻塞推理或 WAL。首版不上通用“远程执行命令”能力，只允许上报状态、确认配置和专门的合成探测。
-
-## 中央服务和数据库
-
-在现有 VM624 增加独立 `ai-log-control` 服务，与只读查询 API 分进程、分账号。Web 服务接受管理员操作并写作业；只有内网 provisioner 持有 Kafka 管理客户端证书，不能将其交给公网实例。管理操作必须受管理员认证、CSRF 防护、审计和内网/VPN访问限制；不能复用当前查询 bearer token 作为管理权限。
-
-两处部署的注册元数据使用 SQLite 足够，放在 VM624 系统盘的专用目录 `/var/lib/ai-log-control/`，使用 WAL + FULL 同步及在线备份。这里只保存少量配置和作业，日志正文仍在 HDD，日志检索仍在 ClickHouse。将来需要多实例控制服务时再迁 PostgreSQL，不为两个来源新增数据库 VM。
-
-| 表 | 主要用途 |
+| 字段 | 用途 |
 |---|---|
-| sources | source_id、tenant、名称、地域、raw Topic、期望状态、配额、配置版本 |
-| credentials | source_id、principal、代次、状态、创建/撤销/确认时间、短时加密交付材料 |
-| source_tokens | token 摘要、source_id、权限范围、状态、最近使用 |
-| config_versions | 非秘密配置、版本、摘要、确认状态；秘密通过 credential_id 引用 |
-| provision_jobs | 幂等键、步骤、期望/实测状态、错误类别、重试信息 |
-| audit_events | 操作者、目标、动作、结果、时间；无密码或日志正文 |
+| tenant_id | 当前两处均为 default |
+| source_id | 稳定的部署来源 ID，消费者按此区分服务器 |
+| source_name / source_region | 该事件清洗时的中央名称、备注快照 |
+| source_verified | 是否通过中央注册 Topic 绑定校验 |
+| source_binding_revision | 当时的绑定版本 |
+| raw_topic / raw_partition / raw_offset | 原始 Kafka 位置，供追溯 |
 
-高频心跳写入来源最新状态，长期趋势进入 Prometheus，避免在 SQLite 无限追加每 30 秒一条记录。注册库与解密密钥分别备份，恢复时按数据库期望状态与 Kafka 实际资源对账；不能恢复后无条件重建账号或改密码。
+这些字段保存在 clean 事件、ClickHouse 明细和 HDD Parquet 包中。消费者按 `(tenant_id, source_id, event_id)` 去重；两个来源使用相同 event_id、capture_id 或 trace_id 也不会相互覆盖。名称不是身份主键，历史事件的名称不会随改名被批量重写。
 
-注册不是一个跨数据库和 Kafka 的原子事务。实现 `provisioning → ready → active`，失败显示 pending/error，后台作业以稳定 resource ID 重试和读回：
+老的 `ai.raw.default.v1` 保留显式 legacy 绑定，其事件标记 `source_verified=false`，不能借该 Topic 冒充已注册来源。未登记 Topic 不会自动订阅。已停用来源仍保留清洗绑定，确保此前已确认收到的积压继续归档。
 
-1. 事务写入来源与 provisioning 作业，冻结 source_id/topic。
-2. 创建并检查 Topic 的分区、RF、保留参数，创建凭据与精确 ACL、用户配额。
-3. 写入版本化来源绑定；清洗器验证配置后在事务边界切换订阅。首版可以受控重启清洗进程，Kafka 暂存积压；不能重启整个 Kafka 集群。
-4. 确认清洗绑定已生效后，再允许下载并激活来源配置。
-5. 身份未生效、Topic 创建失败、权限未传播等情况不能显示 active。
+查询接口支持：
 
-如果暂停接收新来源，已有积压仍需按原身份清洗/归档。registry 的 enabled 状态不能让已经确认收到的合法记录被忽略。
+- `GET /v1/traces/{trace_id}?source_id=...`
+- `GET /v1/captures/{capture_id}?source_id=...`，仍需遍历 `next_after`。
 
-拟新增接口如下，名称用于实现评审，当前不存在：
+查询凭据属于中央管理员，上报账号和心跳 token 均不能查询日志。`source_id` 参数是筛选条件，不是站点级授权：当前中央查询凭据可以读取该组织所有来源。`GET /v1/archive/{key}` 会返回完整混合来源包，尚未提供“站点只能读本站”的查询角色。
 
-| 接口 | 授权和行为 |
+## 凭据生命周期
+
+配置包包含本站 Kafka 凭据、独立心跳 token、配置摘要和固定探测事件。数据库只保存心跳 token 摘要；待交付配置用 Fernet 加密，领取窗口为准备完成后的 24 小时。窗口结束会清除交付密文，已安装凭据仍有效；丢失配置需轮换。秘密不进入访问 URL、命令行、公开状态或审计正文。
+
+轮换流程：生成新用户名 g2 → 安装新配置 → 新凭据心跳确认 → 固定探测事件从 HDD 回放成功 → 管理员确认 → 撤销 g1 ACL 和 SCRAM。新旧账号并存期间平分本站发送配额。取消轮换会撤销新代并保留旧代；若已安装新代，先恢复宿主机旧配置。未确认不会自动撤销旧账号。
+
+停用立即拒绝控制心跳，并由后台撤销所有代次的写 ACL、SCRAM 和用户配额。取消尚未执行的配置作业，正在执行的作业不会把停用来源重新标成可用。既有 Kafka 连接也必须因 ACL 撤销失去写权限。重新启用生成新凭据，不恢复旧密码，保留历史数据和来源 ID。
+
+Kafka 的 SCRAM 更新主要作用于后续连接，不能把“改了密码”当作旧连接已失效的证据；因此同时撤销写 ACL，并验收旧连接和新连接。[Kafka SCRAM 文档](https://kafka.apache.org/41/security/authentication-using-sasl/)
+
+安装器检查 source_id、Topic 和 WAL 路径不能在原安装上更换，原子替换 0600 配置并保留前一份用于启动失败恢复。凭据轮换不清空 WAL。敏感的旧备份配置在轮换确认后可由管理员清理。
+
+## 心跳与故障行为
+
+独立线程每 30 秒经 HTTPS 上报，网络超时 10 秒；页面在 120 秒未收到心跳时显示离线。内容包括配置代次、持久化安装实例 ID、客户端主机名、积压、投递计数和最近确认时间，不包含日志正文。客户端主机名仅供诊断，可信来源仍由服务端绑定决定。
+
+心跳、管理页或注册库不可用不会阻塞 Kafka 上报。Kafka 不可用时保留本地 WAL；推理请求不等待网络。采集层原有内存队列/磁盘额度耗尽时仍可能丢失日志，见[采集契约](AI_LOGGING.md)，不能把已完成的探测当成零丢失承诺。
+
+## 中央服务部署与恢复
+
+- VM624：`ai-log-control`（ailogweb，8081）接受管理员操作和来源心跳；`ai-log-provisioner`（ailogprov）串行执行幂等作业、观察 HDD 探测并在线备份注册库。
+- VM620：root 所有的 `provision_remote.py --role kafka` helper，通过强制 SSH 命令调用本机 Kafka 管理工具。密码经私有临时属性文件传递，不放入 argv。
+- VM623：`--role bindings` helper 校验并原子发布来源绑定，禁止删掉历史绑定或回退版本。清洗器在 Kafka 事务之间热加载，新增来源无需重启 broker。
+- Web 无 SSH helper 私钥、Kafka 管理证书或查询 token。provisioner 仅持有来源固定、禁端口转发、固定命令的两把 SSH 密钥。
+- SQLite 位于 `/var/lib/ai-log-control/registry.sqlite`，使用 WAL + FULL。`sources / credentials / jobs / requests / audit / sessions` 保存小量注册数据；`topic_ready` 防止提前订阅未完成的注册。每日 PBS 系统盘备份覆盖该目录与配置，在线 SQLite 备份每小时写入 `backup/registry.sqlite`。
+- 解密密钥位于 `/etc/ai-log-control/encryption.key`。数据库与密钥分文件且受权限保护；当前都随受控的加密系统盘备份保存，并非独立故障域。恢复时同时恢复密钥、核对 Kafka 实际 ACL/账号和绑定，不无条件重置现有密码。
+
+安装依赖时使用 `requirements-linux-amd64-py312.lock` 加 `requirements-control-linux-amd64-py312.lock`；CI/远程测试使用 `requirements-test-linux-amd64-py312.lock`。全部限定预编译 wheel 和 SHA256。
+
+管理员使用独立密码或专用管理 bearer token；浏览器登录带 Secure/HttpOnly/SameSite cookie，修改和配置下载检查 Origin 与 CSRF。Nginx 和应用都限制管理入口为内网/VPN，公开的 `/agent/` 另有请求限速。当前 proxy HA 配置仅在持有 `.52` 的节点修改，再执行 `proxy-sync`，不要登录漂移 VIP 猜测 SSH 主机身份。
+
+| 接口 | 行为 |
 |---|---|
-| POST /control/v1/sources | 管理员创建来源；要求 Idempotency-Key |
-| GET /control/v1/sources | 管理员查看状态与用量 |
-| GET /control/v1/sources/{id}/bundle | 管理员领取该作业配置包，短期授权，禁止缓存/日志正文 |
-| POST /control/v1/sources/{id}/rotations | 管理员创建下一代凭据与配置 |
-| POST /control/v1/sources/{id}/rotations/{rid}/confirm | 新配置测试与归档完成后确认撤销旧凭据 |
-| POST /control/v1/sources/{id}/disable | 撤销写权限，不删除日志 |
-| POST /agent/v1/heartbeat | source token 只能报告自身状态 |
-| POST /agent/v1/config-acks | source token 确认本站已应用的配置摘要；不单独触发撤销 |
+| POST /control/v1/login；GET /control/v1/session；POST /control/v1/logout | 管理员浏览器会话 |
+| POST /control/v1/sources；GET /control/v1/sources | 创建与查看来源 |
+| POST /control/v1/sources/{id}/bundle | 领取短期配置包，禁止缓存 |
+| POST /control/v1/sources/{id}/rotations | 创建下一代 |
+| POST /control/v1/sources/{id}/confirm-rotation | 检查新代确认与回放后撤销旧代 |
+| POST /control/v1/sources/{id}/cancel-rotation | 撤销新代，保留旧代 |
+| POST /control/v1/sources/{id}/disable；POST /control/v1/sources/{id}/enable | 停用、用新凭据恢复 |
+| POST /control/v1/sources/{id}/rename；GET /control/v1/audit | 名称备注与审计 |
+| POST /agent/v1/heartbeat；POST /agent/v1/config-acks | 来源 token 确认本站配置与状态 |
 
-管理路径只能经受限入口访问，agent 路径经现有 HTTPS 443 访问；Kafka 数据流继续走三个 broker 的 SASL/TLS 443，不需要再开放 WAN 端口。
+来源变更接口要求 `Idempotency-Key`。同一键和同一输入返回同一作业；不同输入复用同一键会被拒绝。浏览器把未决操作键暂存到 sessionStorage，不保存秘密，网络结果不明时重试不会重复创建来源。
 
-## 一次性接入码的后续扩展
+## 容量与保留
 
-第二阶段把下载配置包替换为“生成 15 分钟接入码 → 宿主机交互式输入 → 领取并安装配置”。安装程序先在本地生成设备密钥和持久化 request_id，后台把接入码绑定到来源及设备公钥，重试需证明同一设备私钥，避免网络超时后重复注册。一个接入码不能注册第二个来源或第二台设备。
+本次两站各分配 **96 GiB/副本** 的 raw 缓冲，即每分区 16 GiB，新增来源总额度 192 GiB。现场已有其他接入使用 legacy raw.default，保留其 384 GiB 预算；clean 仍为 252 GiB，另有 DLQ/receipt 少量额度。总上限约 837 GiB/副本，给 1 TiB broker 卷保留约 18% 的余量；分段删除有滞后，应继续监测实际磁盘水位。
 
-接入码只负责首次激活，不能充当长期 Kafka 密码。后台只存接入码摘要，验证尝试限速。一次性绑定与配置领取分阶段确认，响应丢失时允许同一设备、同一 request_id 在领取窗口恢复；不能简单“先烧掉 token，再返回密码”导致半注册。
+原设计假定旧 raw 退出后把 384 GiB 全部分给两站；现场前提已变化，因此本次没有削减其他接入方额度或撤销共享历史账号。新站点只用各自独立凭据。日后迁完 legacy 或扩盘再提高额度，禁止给每个新来源复制一整份预算。
 
-管理页不在线不影响已有 Kafka 上报。自动配置拉取、平滑自动轮换与 Sub2API 页面一键注册以这个设备身份为基础，不能在没有宿主机 agent 的情况下，靠容器页面直接修改宿主机文件。
+72 小时和字节上限先到者生效，分区偏斜可能更早淘汰；96 GiB 不代表保证三天。当前每来源配额 2 MiB/s **每 broker**，不是全群总速率，不能据此承诺公网峰值。
 
-## Topic 与容量
+日志正文经有限元数据清洗、包内重复块去重和 ZSTD 压缩后长期保存在 HDD R6 的自包含 Parquet 包，不做摘要替代，不引入 HDFS。ClickHouse 只存检索字段和目录：7 天后迁 HDD、180 天后清理事件明细索引，归档目录长期保留。
 
-每个 raw Topic 初期仍用 6 分区，与现有 clean 的 6 分区保持一致，RF=3、minISR=2；清洗器保留按分区顺序发往 clean 的行为。来源增长后再按实测重平衡，不在第一版改变序号与分区契约。
+在两站原始总量 50–100 GB/天基础上，最终落盘若是原始量 10%，约 1.83–3.65 TB/年；若是 25%，约 4.56–9.13 TB/年。实际比例必须采样测量，并计入重试和双边界采集放大。HDD 正文仍缺独立第二副本；本次来源管理没有改变这一现状。
 
-**两个站点合计 50–100 GB/天，不能把每站点的容量额度当成总量再翻倍。** 保持原 raw 总字节预算 384 GiB/副本，初期平均分配 A/B：每来源 192 GiB，即 32 GiB/分区；clean 仍为 42 GiB × 6 分区。配额按实际流量调整，比如 A/B 为 80/20，而不是给每个新来源复制一份完整预算。72 小时与字节上限先到者生效；偏斜分区可能更早淘汰。
+## 运行监控
 
-旧 raw.default 迁移期间占用也计入总预算。当前公共 default 接入账号仅用于既有验收，生产两站接入前需确认没有其他使用者，再撤销其写权限；保留并归档原消息。新来源不得继续使用共享 ingest-default。不能在未核对旧消费者和归档之前直接删除旧 Topic 或重置位点。旧归档保留原有 source_id，并在迁移目录中标记为 legacy；不能把原来由消息自报的来源追认为已经通过新身份绑定验证。
+`metrics.py` 由 root 所有的定时采集器执行，输出服务、消费积压、Topic/分区保留量、注册库、配置任务积压、最近观察时间和凭据年龄，不输出正文或秘密。`monitoring-rules.yml` 共 15 条规则，新增中央配置任务卡住、来源控制观察失败和凭据到期轮换提醒。凭据 90 天规则只是提醒，不自动吊销。
 
-Kafka 用户级速率配额按来源设置，避免一个来源压垮另一个；client.id 只作标签，不作为可信配额身份。配额是 broker 侧约束，不等于全群总速率；轮换两代账号并存时要计入合计预算。第一版管理页显示限速状态与 WAL 增长，不宣称达到某个尚未实测的公网峰值。
+各来源心跳已导出为指标并在页面显示，但实际公网站点尚未部署，因此没有提前打开来源心跳离线告警。源端上线时再接入该告警以及采集丢失计数；否则中央服务正常不代表每台公网源端正常。
 
-总量不变，既有 HDD 估算仍成立：最终落盘为原始量 10% 时约 1.83–3.65 TB/年，25% 时约 4.56–9.13 TB/年。需计入中转双边界和重试带来的采集放大。两处来源不要求两份正文数据库；正文独立第二副本仍是已有待解决项，新增接入管理不会自动补上备份。
+## 验收与后续范围
 
-## 实施顺序和验收
+远程测试覆盖注册幂等、容量限制、秘密不进入公开状态、心跳来源绑定、浏览器 CSRF、轮换前置条件、停用/恢复、并发注册发布顺序、配置过期、注册库恢复、同 ID 跨来源归档及查询筛选。
 
-第一批实现中央来源页、注册库、幂等 provisioner、每来源 raw Topic 和凭据、清洗身份绑定、私密配置包、心跳、手动平滑轮换。沿用现有部署分支，在功能完成和验收前保持多站点新流程关闭。
+真实 Kafka → 清洗 → ClickHouse → HDD 验收使用中央测试机的合成事件，检查跨 Topic 拒绝、伪造来源和 legacy 冒用进入 DLQ、两站相同请求 ID 不混淆、旧连接撤权和新连接认证失败。合成心跳主机为 `acceptance-vm624 (not production)`；安装器实机测试报告 `ai-query-01`，随后测试 shipper 已停用并移除配置。两者都不是公网生产实例。
 
-第二批增加 Sub2API 状态页、一次性接入码、设备绑定与自动配置轮换。来源隔离和独立凭据应在第一批完成，不能等 UI 自动化后才补。
-
-必须验证以下结果：
-
-- A/B 同时写入，各自完整回放；两者使用相同 event_id 或 trace_id 时，跨来源事件不会被误去重。相同 trace 可跨站汇总，每个 capture 的序号独立，不能按跨站时间戳推断全局因果顺序。
-- A 的密码不能写 B Topic、不能写 clean、不能读 Topic；A 在自己 Topic 中伪造 B source_id 被隔离到 DLQ。
-- A source token 不能替 B 发心跳、领配置或查日志；查询入口的来源筛选与授权边界符合上述限制。
-- A 撤权或密码泄漏处理不影响 B；撤权后既有连接与新连接写入都被拒绝。
-- g1/g2 平滑切换时不删除未确认 WAL、不改变 source_id，重复事件正确去重；未完成轮换保持可见待处理状态。
-- 注册过程中 Topic 创建/ACL/绑定发布任一步失败，重复同一幂等请求不会生成第二来源或乱换密码。
-- 中央管理服务不可用时，A/B 均继续上报；心跳线程失效不会阻塞 WAL 投递。
-- 浏览器、日志、Git、审计记录中不出现凭据正文；首个合成请求最终能从 HDD 精确还原。
+尚未加入一次性接入码、宿主机远程执行、自动配置拉取、自动定期换密钥或 Sub2API 内嵌设置页。第一阶段的入口是中央管理页与宿主机配置包安装，不需要另建前端项目或改两套 Sub2API 代码。

@@ -10,6 +10,7 @@ import time
 
 from common import LOG, ch_insert, consumer, load_config, offsets, producer, s3_client, status
 from protocol import canonical, catalog_entries, make_pack, normalize
+from source_bindings import binding_snapshot
 
 STOP = False
 
@@ -38,13 +39,21 @@ def emit(client, topic, value, key, partition=-1):
 
 
 def cleaner(config):
-    mapping = config['raw_topics']
+    mapping, revision = binding_snapshot(config)
+    registered_ids = {v['source_id'] for v in mapping.values() if not v.get('legacy')}
     client = consumer(config, 'ai-cleaner-main', list(mapping))
     output = producer(config, transactional=True)
     output.init_transactions(60)
     counters = {'processed': 0, 'dead_lettered': 0}
     try:
         while not STOP:
+            next_mapping, next_revision = binding_snapshot(config)
+            if next_revision != revision:
+                if set(next_mapping) != set(mapping):
+                    client.subscribe(list(next_mapping))
+                mapping, revision = next_mapping, next_revision
+                registered_ids = {v['source_id'] for v in mapping.values() if not v.get('legacy')}
+            counters['binding_revision'] = revision
             batch = messages(client)
             if not batch:
                 counters['updated_at'] = int(time.time()); status(config, counters)
@@ -52,9 +61,13 @@ def cleaner(config):
             output.begin_transaction()
             try:
                 for message in batch:
-                    tenant = mapping[message.topic()]
+                    binding = mapping[message.topic()]
+                    tenant = binding['tenant_id']
                     try:
-                        event = normalize(message.value(), tenant)
+                        event = normalize(message.value(), tenant, None if binding.get('legacy') else binding)
+                        if binding.get('legacy') and event['source_id'] in registered_ids:
+                            raise ValueError('registered source cannot use a legacy topic')
+                        event['raw_topic'] = message.topic()
                         event['raw_partition'] = message.partition()
                         event['raw_offset'] = message.offset()
                         key = (tenant+':'+event['source_id']+':'+event['capture_id']).encode()
@@ -164,7 +177,7 @@ def archiver(config):
 
 
 def event_row(event, message):
-    return {'tenant_id': event['tenant_id'], 'source_id': event['source_id'], 'trace_id': event['trace_id'], 'capture_id': event['capture_id'], 'event_id': event['event_id'], 'event_time': event['timestamp'], 'sequence': event['sequence'], 'kind': event['kind'], 'message_id': event.get('message_id', ''), 'part': event.get('part', 0), 'parts': event.get('parts', 0), 'body_sha256': event['body_sha256'], 'body_bytes': event['body_bytes'], 'metadata_json': json.dumps(event['metadata'], ensure_ascii=False), 'kafka_partition': message.partition(), 'kafka_offset': message.offset(), 'version': message.offset()+1}
+    return {'tenant_id': event['tenant_id'], 'source_id': event['source_id'], 'trace_id': event['trace_id'], 'capture_id': event['capture_id'], 'event_id': event['event_id'], 'event_time': event['timestamp'], 'sequence': event['sequence'], 'kind': event['kind'], 'source_name': event.get('source_name', ''), 'source_region': event.get('source_region', ''), 'source_verified': int(event.get('source_verified', False)), 'raw_topic': event.get('raw_topic', ''), 'raw_partition': event.get('raw_partition', 0), 'raw_offset': event.get('raw_offset', 0), 'source_binding_revision': event.get('source_binding_revision', 0), 'message_id': event.get('message_id', ''), 'part': event.get('part', 0), 'parts': event.get('parts', 0), 'body_sha256': event['body_sha256'], 'body_bytes': event['body_bytes'], 'metadata_json': json.dumps(event['metadata'], ensure_ascii=False), 'kafka_partition': message.partition(), 'kafka_offset': message.offset(), 'version': message.offset()+1}
 
 
 def indexer(config):

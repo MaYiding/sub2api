@@ -1,0 +1,5 @@
+# Remote/CI tests; all wheels are pinned and hashed.
+-r requirements-linux-amd64-py312.lock
+-r requirements-control-linux-amd64-py312.lock
+httpx==0.28.1 --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+httpcore==1.0.9 --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55

@@ -24,7 +24,7 @@ def scrub_metadata(value, depth=0):
     return value
 
 
-def normalize(raw, tenant):
+def normalize(raw, tenant, binding=None):
     event = json.loads(raw)
     if not isinstance(event, dict):
         raise ValueError('event must be an object')
@@ -48,6 +48,8 @@ def normalize(raw, tenant):
     # archive catalog use parsed instants, rather than lexical time-zone order.
     if 'message_id' in event and (not isinstance(event['message_id'], str) or len(event['message_id']) > 256):
         raise ValueError('invalid message identity')
+    if binding and event['source_id'] != binding['source_id']:
+        raise ValueError('source does not match authenticated topic binding')
     data = base64.b64decode(event.get('data_base64', ''), validate=True)
     if len(data) > 65536:
         raise ValueError('unfragmented payload exceeds 64 KiB')
@@ -62,6 +64,12 @@ def normalize(raw, tenant):
         if key in event:
             result[key] = event[key]
     result.update(tenant_id=tenant, clean_version=1, metadata=scrub_metadata(metadata), data_base64=base64.b64encode(data).decode(), body_sha256=hashlib.sha256(data).hexdigest(), body_bytes=len(data))
+    if binding:
+        result.update(source_id=binding['source_id'], source_name=binding.get('name', ''),
+                      source_region=binding.get('region', ''), source_verified=True,
+                      source_binding_revision=binding.get('revision', 0))
+    else:
+        result['source_verified'] = False
     return result
 
 

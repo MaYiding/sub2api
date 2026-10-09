@@ -16,7 +16,7 @@ source WAL -> Kafka raw -> transactional cleaner -> Kafka clean
                                             archive receipts -> indexer
 ```
 
-The cleaner binds tenancy from its configured raw topic, validates the event
+The cleaner binds tenancy and registered source identity from its raw topic, validates the event
 schema and redacts explicit credential fields in envelope metadata. It never
 summarizes, truncates or rewrites message bodies. Malformed input is fragmented
 into a dead-letter topic for operator recovery. Kafka offsets and cleaned
@@ -72,6 +72,7 @@ account. Sample shape (replace placeholders outside Git):
   "tls": {"ca": "/private/ca.crt", "cert": "/private/cleaner.crt", "key": "/private/cleaner.key"},
   "status_path": "/var/lib/ai-log-pipeline/cleaner-status.json",
   "raw_topics": {"ai.raw.default.v1": "default"},
+  "bindings_path": "/etc/ai-logs/pipeline/source-bindings.json",
   "clean_topics": ["ai.clean.default.v1"]
 }
 ```
@@ -123,3 +124,28 @@ events, worker status timestamps, under-replicated partitions, certificates,
 archive checksums and disk free space. Permanent retention requires expanding
 storage as it fills; it cannot be guaranteed by a fixed-size RAID volume. Keep
 an independent copy of bulk archives in addition to OS/metadata backups.
+
+## Source registration control plane
+
+See [the implemented multi-source runbook](../../deploy/AI_LOG_MULTI_SITE_DESIGN.md).
+`control.py` serves the administrator UI and scoped heartbeat API;
+`provisioner.py` processes SQLite jobs separately. `provision_remote.py` is
+installed as a root-owned forced SSH helper on the broker and cleaner hosts.
+Web must not receive the helper keys or Kafka administrator certificate.
+
+Use `Registry.initialize()` for the additive registry schema before restarting
+the control services. Apply `schema.sql` before deploying the new indexer/API;
+source activity materialized views count transport attempts, not billing usage.
+The registry config requires database/encryption-key paths, public origin and
+brokers; Web additionally needs admin credential hashes, session secret and
+trusted network/proxy addresses. The provisioner requires fixed SSH helper
+endpoints/known-hosts, a separate query token, status and online-backup paths.
+Keep all configurations outside Git.
+
+Control dependencies add `requirements-control-linux-amd64-py312.lock`.
+Run tests on CI or the designated remote test host with the combined
+`requirements-test-linux-amd64-py312.lock` and `python -m unittest discover -v`.
+
+Source filters on trace/capture APIs do not grant per-source read authorization:
+central query credentials still read all sources in their tenant. Source Kafka
+and heartbeat credentials cannot read archives or call administrator APIs.

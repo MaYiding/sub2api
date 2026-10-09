@@ -33,33 +33,28 @@ SUB2API_AI_LOG_SPOOL_HOST_DIR=/var/lib/sub2api-ai-log/spool \
 ./blue-green-deploy.sh YOUR_PREBUILT_IMAGE
 ```
 
-Create a mode-0600 shipper JSON configuration outside Git:
-
-```json
-{
-  "bootstrap_servers": "broker-1.kafka.infra.qingtianji.com:443,broker-2.kafka.infra.qingtianji.com:443,broker-3.kafka.infra.qingtianji.com:443",
-  "username": "ingest-default",
-  "password": "REPLACE_FROM_PRIVATE_CONNECTION_BUNDLE",
-  "topic": "ai.raw.default.v1",
-  "source_id": "sub2api-production",
-  "spool_dir": "/var/lib/sub2api-ai-log/spool"
-}
-```
+Register each deployment in the [central source manager](AI_LOG_MULTI_SITE_DESIGN.md)
+at `https://logs.kafka.infra.qingtianji.com/admin/sources` (private network/VPN).
+Download that source's private `shipper.json`, keep it outside Git with mode
+0600, and replace the example `AI_LOG_SOURCE_ID` above with its generated ID.
+Do not use the historical shared `ingest-default` credentials for a new site.
 
 On an Ubuntu host with Python 3 and venv support, run
 `sudo deploy/install-ai-log-shipper.sh /absolute/private/shipper.json`.
 This installs a wheel-only Python runtime and a restarting systemd service.
-The service uses host UID 1000 and that account’s actual primary group; if UID
+The service uses host UID 1000 and that account's actual primary group; if UID
 1000 is unused, the installer creates a dedicated non-login account.
 The configuration uses the **host** spool path, while the app container sees
-the shared mount at `/app/ai-log-spool`. Use normal CA verification; the public
-listener uses SASL/SCRAM over TLS. The ingest principal can write only its raw
-topic. Credentials are not included in this repository.
+the shared mount at `/app/ai-log-spool`. The installer prints the non-secret
+source ID and host mount path needed for deployment.
 
-For separate deployment sites, use distinct source identities and credentials.
-The proposed registration and isolation workflow is documented in
-[the multi-site design](AI_LOG_MULTI_SITE_DESIGN.md); its management UI and
-provisioning functions are not implemented yet.
+Each site has its own Kafka username, raw topic and scoped heartbeat token.
+The shipper verifies TLS, sends a stable synthetic probe through its WAL and
+reports heartbeat independently of Kafka delivery. Central confirmation reads
+that probe back from HDD. The central registration page supports credential
+rotation, cancellation, disable and re-enable without changing source identity.
+Re-run the installer with a new configuration for credential rotation; it
+refuses to change source/topic/spool in place and never clears existing WAL.
 
 ## Capture contract
 

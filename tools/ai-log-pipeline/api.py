@@ -57,25 +57,25 @@ def health():
 
 
 @APP.get('/v1/traces/{trace_id}')
-def trace(trace_id: str, owner=Depends(tenant), limit: int = Query(default=100, ge=1, le=1000)):
+def trace(trace_id: str, owner=Depends(tenant), source_id: str = '', limit: int = Query(default=100, ge=1, le=1000)):
     if len(trace_id) > 256:
         raise HTTPException(400, 'Invalid trace ID')
-    rows = query('SELECT source_id,capture_id,min(first_time) AS first_time,max(last_time) AS last_time,uniqExact(archive_key) AS archive_packs FROM ai_logs.archive_catalog FINAL WHERE tenant_id={tenant:String} AND trace_id={trace:String} GROUP BY source_id,capture_id ORDER BY first_time LIMIT {limit:UInt32}', {'tenant': owner, 'trace': trace_id, 'limit': limit})
+    rows = query('SELECT source_id,capture_id,min(first_time) AS first_time,max(last_time) AS last_time,uniqExact(archive_key) AS archive_packs FROM ai_logs.archive_catalog FINAL WHERE tenant_id={tenant:String} AND trace_id={trace:String} AND ({source:String}=\'\' OR source_id={source:String}) GROUP BY source_id,capture_id ORDER BY first_time LIMIT {limit:UInt32}', {'tenant': owner, 'trace': trace_id, 'source': source_id, 'limit': limit})
     return {'trace_id': trace_id, 'captures': rows, 'limit': limit, 'archive_delay_seconds': CONFIG.get('archive_delay_seconds', 60)}
 
 
 @APP.get('/v1/captures/{capture_id}')
-def capture(capture_id: uuid.UUID, owner=Depends(tenant), after: str = '', packs: int = Query(default=4, ge=1, le=8)):
+def capture(capture_id: uuid.UUID, owner=Depends(tenant), source_id: str = '', after: str = '', packs: int = Query(default=4, ge=1, le=8)):
     if after:
         checked_key(after, owner)
-    keys = query('SELECT DISTINCT archive_key FROM ai_logs.archive_catalog FINAL WHERE tenant_id={tenant:String} AND capture_id={capture:String} AND archive_key>{after:String} ORDER BY archive_key LIMIT {limit:UInt32}', {'tenant': owner, 'capture': str(capture_id), 'after': after, 'limit': packs+1})
+    keys = query('SELECT DISTINCT archive_key FROM ai_logs.archive_catalog FINAL WHERE tenant_id={tenant:String} AND capture_id={capture:String} AND ({source:String}=\'\' OR source_id={source:String}) AND archive_key>{after:String} ORDER BY archive_key LIMIT {limit:UInt32}', {'tenant': owner, 'capture': str(capture_id), 'source': source_id, 'after': after, 'limit': packs+1})
     page, more = keys[:packs], len(keys)>packs
     events, seen, encoded_bytes = [], set(), 0
     last_key = after
     for index, row in enumerate(page):
         pack_events = []
         for event in read_pack(read_object(row['archive_key'], owner)):
-            if event['tenant_id'] != owner or event['capture_id'] != str(capture_id):
+            if event['tenant_id'] != owner or event['capture_id'] != str(capture_id) or (source_id and event['source_id'] != source_id):
                 continue
             identity = (event['source_id'], event['event_id'])
             if identity not in seen:
@@ -96,3 +96,9 @@ def capture(capture_id: uuid.UUID, owner=Depends(tenant), after: str = '', packs
 @APP.get('/v1/archive/{key:path}')
 def archive(key: str, owner=Depends(tenant)):
     return Response(read_object(key, owner), media_type='application/vnd.apache.parquet', headers={'Content-Disposition': 'attachment; filename="ai-log-archive.parquet"'})
+
+
+@APP.get('/v1/sources/activity')
+def source_activity(owner=Depends(tenant)):
+    rows = query("SELECT source_id,kind,maxMerge(seen_at) AS last_seen,sumMerge(events) AS received_events,sumMerge(body_bytes) AS received_body_bytes FROM ai_logs.source_activity WHERE tenant_id={tenant:String} AND day>=today()-1 GROUP BY source_id,kind", {'tenant': owner})
+    return {'sources': rows, 'note': 'Transport counters include retries; these are not billing counts.'}
