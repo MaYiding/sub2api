@@ -35,7 +35,12 @@ crash between these operations may replay IDs or leave overlapping packs;
 readers must deduplicate `(tenant_id, source_id, event_id)` across all pages.
 Receipt failure must never be treated as successful archival. Object store
 durability and an independent backup remain necessary: a successful S3 reply
-does not protect against losing the entire storage host.
+does not protect against losing the entire storage host. For SeaweedFS, enable
+path-specific `fsync` on the archive bucket and use synchronous durable filer
+metadata. The deployed leveldb2 metadata volume uses an ext4 `sync` mount;
+body fsync alone does not make the separate filer directory durable. Verify the
+[SeaweedFS path settings](https://github.com/seaweedfs/seaweedfs/wiki/Path-Specific-Configuration)
+and metadata backend together before committing archival offsets.
 
 ClickHouse stores searchable metadata, not large bodies. `schema.sql` moves
 recent metadata from SSD to HDD after seven days and deletes detailed event
