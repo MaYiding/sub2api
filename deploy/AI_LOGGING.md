@@ -56,6 +56,11 @@ the shared mount at `/app/ai-log-spool`. Use normal CA verification; the public
 listener uses SASL/SCRAM over TLS. The ingest principal can write only its raw
 topic. Credentials are not included in this repository.
 
+For separate deployment sites, use distinct source identities and credentials.
+The proposed registration and isolation workflow is documented in
+[the multi-site design](AI_LOG_MULTI_SITE_DESIGN.md); its management UI and
+provisioning functions are not implemented yet.
+
 ## Capture contract
 
 - HTTP gateway request bytes, delivered HTTP/SSE response bytes, and each
