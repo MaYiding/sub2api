@@ -18,6 +18,7 @@ import (
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
@@ -154,6 +155,7 @@ func runMainServer() {
 	if err != nil {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
+	defer ailog.Shutdown()
 	defer app.Cleanup()
 	if app.PluginManager != nil {
 		if err := app.PluginManager.Start(context.Background()); err != nil {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
+
 	coderws "github.com/coder/websocket"
 )
 
@@ -97,6 +99,9 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 	for {
 		select {
 		case result := <-readDone:
+			if result.err == nil {
+				ailog.FromContext(controlCtx).Record("ws.client", result.payload, map[string]any{"message_type": int(result.messageType)})
+			}
 			return result.messageType, result.payload, result.err
 		case <-timeoutStart:
 			startTimeout()

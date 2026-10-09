@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+
 	"errors"
 	"fmt"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -651,7 +653,7 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 			payload = c.restoreToolNames(payload)
 		}
 	}
-	return c.conn.Write(ctx, msgType, payload)
+	return WriteOpenAIWSClientMessage(ailog.WithContext(ctx, ailog.FromContext(c.controlCtx)), c.conn, msgType, payload)
 }
 
 func (c *openAIWSClientFrameConn) Close() error {
@@ -785,7 +787,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 		if eventBytes != nil {
 			writeCtx, cancelWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
-			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
+			_ = WriteOpenAIWSClientMessage(writeCtx, clientConn, coderws.MessageText, eventBytes)
 			cancelWrite()
 		}
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
@@ -1130,7 +1132,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				return
 			}
 			writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
-			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
+			_ = WriteOpenAIWSClientMessage(writeCtx, clientConn, coderws.MessageText, eventBytes)
 			cancel()
 		},
 	}
@@ -1207,6 +1209,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					RequestID: turn.RequestID,
 					Usage: OpenAIUsage{
 						InputTokens:              turn.Usage.InputTokens,
+						ImageInputTokens:         turn.Usage.ImageInputTokens,
 						OutputTokens:             turn.Usage.OutputTokens,
 						CacheCreationInputTokens: turn.Usage.CacheCreationInputTokens,
 						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
@@ -1348,6 +1351,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		RequestID: relayResult.RequestID,
 		Usage: OpenAIUsage{
 			InputTokens:              relayResult.Usage.InputTokens,
+			ImageInputTokens:         relayResult.Usage.ImageInputTokens,
 			OutputTokens:             relayResult.Usage.OutputTokens,
 			CacheCreationInputTokens: relayResult.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,

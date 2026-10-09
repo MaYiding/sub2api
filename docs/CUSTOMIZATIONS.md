@@ -1,6 +1,6 @@
 # Repository customizations
 
-This deployment follows `origin/dev` and intentionally keeps only three local
+This deployment follows `origin/dev` and intentionally keeps four local
 operational extensions:
 
 1. **Blue-green deployment**
@@ -16,6 +16,11 @@ operational extensions:
    - `tools/cockpit-token-sync/`
    - the minimal account/quota service integration required by that syncer
 
+4. **AI log capture and archival** (explicitly enabled deployment feature)
+   - `backend/internal/pkg/ailog/` and gateway/transport capture hooks
+   - `tools/ai-log-pipeline/` and `deploy/AI_LOGGING.md`
+   - Durable bounded source spool, Kafka delivery and cleaned HDD archive
+
 Everything else should continue to follow upstream. In particular, image model
 routing, model defaults, retry policy, migrations, API behavior, and normal CI
 workflows are upstream-owned. The production image currently uses upstream's
@@ -25,14 +30,13 @@ workflows are upstream-owned. The production image currently uses upstream's
 The following are deliberately not part of this customization layer:
 
 - the former retry-count change from 5 to 10;
-- prompt or response capture;
 - account-specific operational skills;
 - a repository-scheduled production auto-deploy workflow.
 
 ## Updating from upstream
 
 1. Fetch and integrate the latest `origin/dev` in an isolated worktree.
-2. Resolve conflicts by preserving only the three extensions above.
+2. Resolve conflicts by preserving the four extensions above.
 3. Run the blue-green, recharge, Cockpit sync, and relevant Go test suites.
 4. Build a `linux/amd64` image in CI or on a separate build host.
 5. Back up production, then deploy the prebuilt image with the blue-green

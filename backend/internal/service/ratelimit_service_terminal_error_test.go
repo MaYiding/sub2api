@@ -21,6 +21,21 @@ func TestClassifyTerminalAccountError(t *testing.T) {
 		want       bool
 	}{
 		{
+			name:       "cline_credit_exhaustion_keeps_wallet_recovery",
+			account:    &Account{Platform: PlatformCline, Type: AccountTypeAPIKey},
+			statusCode: http.StatusPaymentRequired,
+			body:       `{"error":{"code":"insufficient_credits","message":"Insufficient credits"}}`,
+			want:       false,
+		},
+		{
+			name:       "cline_revoked_key_remains_account_terminal",
+			account:    &Account{Platform: PlatformCline, Type: AccountTypeAPIKey},
+			statusCode: http.StatusForbidden,
+			body:       `{"error":{"code":"api_key_revoked","message":"API key has been revoked"}}`,
+			wantKind:   terminalAccountCredentialRevoked,
+			want:       true,
+		},
+		{
 			name:       "openai_429_insufficient_quota_is_terminal",
 			account:    &Account{Platform: PlatformOpenAI},
 			statusCode: http.StatusTooManyRequests,

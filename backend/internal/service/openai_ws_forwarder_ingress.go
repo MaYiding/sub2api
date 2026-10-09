@@ -456,7 +456,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			eventBytes := buildOpenAIFastPolicyBlockedWSEvent(blocked)
 			if eventBytes != nil {
 				writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
-				_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
+				_ = WriteOpenAIWSClientMessage(writeCtx, clientConn, coderws.MessageText, eventBytes)
 				cancel()
 			}
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
@@ -487,7 +487,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		message = restoreCodexToolNamesFromContext(c, message)
-		return clientConn.Write(writeCtx, coderws.MessageText, message)
+		return WriteOpenAIWSClientMessage(writeCtx, clientConn, coderws.MessageText, message)
 	}
 
 	readClientMessage := func() ([]byte, error) {

@@ -7,10 +7,10 @@
 # Stage 3: Final minimal image
 # =============================================================================
 
-ARG NODE_IMAGE=node:24.19.0-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
-ARG GOLANG_IMAGE=golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
-ARG ALPINE_IMAGE=alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
-ARG POSTGRES_IMAGE=postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+ARG NODE_IMAGE=node:24-alpine
+ARG GOLANG_IMAGE=golang:1.27.2-alpine
+ARG ALPINE_IMAGE=alpine:3.21
+ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=

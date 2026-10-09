@@ -1,6 +1,11 @@
 package routes
 
 import (
+	"bytes"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -68,10 +73,45 @@ func TestGatewayRoutesGroupModelAllowlistMountedOnEveryGatewayRoute(t *testing.T
 	require.NoError(t, err)
 	source := string(routeSource)
 
-	// rootRoute helper：apiKeyAuth 之后、compositeTarget 之前。
-	rootHelper := regexp.MustCompile(regexp.QuoteMeta(`r.Handle(method, path, limit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic, handler)`))
-	require.Regexp(t, rootHelper, source,
-		"root alias helper must place the allowlist between apiKeyAuth and compositeTarget")
+	// These two chains are single calls. Check the required relative order,
+	// allowing independent middleware such as capture between the boundaries.
+	set := token.NewFileSet()
+	file, err := parser.ParseFile(set, "gateway.go", routeSource, 0)
+	require.NoError(t, err)
+	assertAdmissionOrder := func(receiver, method string) {
+		t.Helper()
+		found := false
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != method {
+				return true
+			}
+			owner, ok := selector.X.(*ast.Ident)
+			if !ok || owner.Name != receiver {
+				return true
+			}
+			found = true
+			positions := map[string]int{}
+			for i, argument := range call.Args {
+				var text bytes.Buffer
+				require.NoError(t, format.Node(&text, set, argument))
+				positions[text.String()] = i
+			}
+			auth, hasAuth := positions["gin.HandlerFunc(apiKeyAuth)"]
+			allowlist, hasAllowlist := positions["groupModelAllowlist"]
+			rewrite, hasRewrite := positions["compositeTarget"]
+			require.True(t, hasAuth && hasAllowlist && hasRewrite, "%s.%s must retain all admission boundaries", receiver, method)
+			require.Less(t, auth, allowlist, "authentication must precede model admission")
+			require.Less(t, allowlist, rewrite, "model admission must precede rewriting")
+			return true
+		})
+		require.True(t, found, "missing %s.%s route chain", receiver, method)
+	}
+	assertAdmissionOrder("r", "Handle")
 
 	chains := []struct {
 		group     string
@@ -93,9 +133,7 @@ func TestGatewayRoutesGroupModelAllowlistMountedOnEveryGatewayRoute(t *testing.T
 			"%s chain must mount groupModelAllowlist after auth and before %s", chain.group, chain.composite)
 	}
 
-	// codexDirect 链是一条 Use 调用，直接断言顺序。
-	codexDirect := regexp.MustCompile(regexp.QuoteMeta(`codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), groupModelAllowlist, compositeTarget, requireGroupAnthropic)`))
-	require.Regexp(t, codexDirect, source, "codexDirect chain must mount the allowlist after auth and before compositeTarget")
+	assertAdmissionOrder("codexDirect", "Use")
 
 	// 所有带 apiKeyAuth 的根路径路由必须收敛到 rootRoute，避免漏挂。
 	stray := regexp.MustCompile(`\br\.(GET|POST|PUT|PATCH|DELETE)\("[^"]+",[^(]*apiKeyAuth`)
@@ -152,6 +190,7 @@ func TestGatewayRoutesGroupModelAllowlistCoversRootAliasRoutes(t *testing.T) {
 		{http.MethodGet, "/realtime?model=gpt-4.1", ""},
 		{http.MethodPost, "/v1/responses", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/v1/messages", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/v1/systemone", `{"model":"gpt-4.1","state":"x","questions":{"q":{"type":"noul","instructions":"x"}}}`},
 		{http.MethodPost, "/v1/messages/count_tokens", `{"model":"gpt-4.1","messages":[]}`},
 		{http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/v1/embeddings", `{"model":"gpt-4.1","input":"hi"}`},

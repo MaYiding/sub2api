@@ -1,0 +1,98 @@
+groups:
+  - name: ai-log-pipeline
+    rules:
+      - alert: AILogServiceDown
+        expr: ai_log_service_up == 0
+        for: 3m
+        labels: {severity: critical, category: ai-logs}
+        annotations:
+          summary: '{{ $labels.instance_name }} 的 {{ $labels.unit }} 已停止'
+          description: '检查对应 systemd 服务。Kafka 仅短期缓冲，修复后核对消费积压与归档回放。'
+      - alert: AILogCollectorStale
+        expr: (time() - ai_log_collector_last_success_timestamp > 300) or (up{service="ai-logs"} == 0) or ((up{service="ai-logs"} == 1) unless on(instance) ai_log_collector_last_success_timestamp)
+        for: 3m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'AI 日志监控采集异常：{{ $labels.instance_name }}'
+      - alert: AILogWorkerStalled
+        expr: time() - ai_log_worker_updated_at > 300
+        for: 3m
+        labels: {severity: critical, category: ai-logs}
+        annotations:
+          summary: 'AI 日志 {{ $labels.component }} 已超过五分钟未完成工作循环'
+      - alert: AILogDeadLetter
+        expr: increase(ai_log_worker_dead_lettered[10m]) > 0
+        for: 1m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'AI 原始日志清洗失败，记录已进入 DLQ'
+          description: 'DLQ 保留七天。检查协议版本与来源，在过期前修复并回放；不要删除失败记录。'
+      - alert: AILogKafkaReplication
+        expr: (ai_log_kafka_under_replicated_partitions > 0) or (ai_log_kafka_collector_success == 0)
+        for: 5m
+        labels: {severity: critical, category: ai-logs}
+        annotations:
+          summary: 'AI Kafka 副本或监控读取异常'
+      - alert: AILogConsumerBacklog
+        expr: sum by (group, topic) (ai_log_kafka_consumer_lag) > 100000
+        for: 10m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: '{{ $labels.group }} 在 {{ $labels.topic }} 积压超过十万条'
+      - alert: AILogConsumerNotAdvancing
+        expr: (ai_log_kafka_consumer_lag > 100) and (delta(ai_log_kafka_committed_offset[15m]) <= 0)
+        for: 5m
+        labels: {severity: critical, category: ai-logs}
+        annotations:
+          summary: '{{ $labels.group }} 消费位点停止推进'
+      - alert: AILogKafkaRetentionPressure
+        expr: ai_log_kafka_partition_bytes / on(topic) group_left ai_log_kafka_topic_byte_cap > 0.8
+        for: 15m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'Kafka {{ $labels.topic }} 分区接近字节保留上限'
+          description: '实际保留窗口可能短于 72 小时。核对写入速率和消费者积压，及时扩大容量或恢复消费。'
+      - alert: AILogCapacityWarning
+        expr: ai_log_disk_available_bytes / ai_log_disk_size_bytes < 0.30
+        for: 10m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: '{{ $labels.instance_name }} 的 {{ $labels.mount }} 可用空间不足 30%'
+          description: '长期归档不自动删除，需安排扩容。SeaweedFS 保留 15% 空间，达到阈值前必须处理。'
+      - alert: AILogCapacityCritical
+        expr: ai_log_disk_available_bytes / ai_log_disk_size_bytes < 0.20
+        for: 5m
+        labels: {severity: critical, category: ai-logs}
+        annotations:
+          summary: 'AI 日志存储可用空间不足 20%，归档可能即将停止'
+      - alert: AILogCertificateExpiring
+        expr: ai_log_certificate_expiry_timestamp - time() < 30 * 86400
+        for: 1h
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: '{{ $labels.instance_name }} 的 {{ $labels.certificate }} 将在三十天内到期'
+          description: '公网站点检查 proxy01 的 ai-logs-certificate.timer；内部 mTLS 证书需使用私有 CA 轮换。'
+      - alert: AILogCertificateDistributionStale
+        expr: time() - ai_log_certificate_distribution_last_success_timestamp > 172800
+        for: 1h
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'Kafka 公网证书续期分发已超过两天未成功'
+      - alert: AILogSourceProvisioningStalled
+        expr: ai_log_source_pending_job_age_seconds > 600
+        for: 3m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'AI 来源 {{ $labels.source_id }} 的配置作业持续未完成'
+      - alert: AILogControlObservationFailed
+        expr: (time() - ai_log_worker_observe_success_at{component="provisioner"} > 300) or (ai_log_control_registry_readable == 0)
+        for: 3m
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'AI 来源注册库或归档探测观察异常'
+      - alert: AILogSourceCredentialRotationDue
+        expr: time() - ai_log_source_oldest_credential_created_timestamp > 90 * 86400
+        for: 1h
+        labels: {severity: warning, category: ai-logs}
+        annotations:
+          summary: 'AI 来源 {{ $labels.source_id }} 的凭据已使用超过 90 天，请安排轮换'

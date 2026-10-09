@@ -224,6 +224,13 @@ func terminalAccountKindAllowed(account *Account, statusCode int, kind terminalA
 	if statusCode == http.StatusUnauthorized && account.IsOpenAIOAuth() {
 		return false
 	}
+	// Cline has independent credits, subscription and free-model wallets.
+	// Exhausting credits must reach its wallet cooldown/recovery path without
+	// disabling other wallets or preventing the periodic recharge probe.
+	// Account revocation and explicit administrator error-code rules still win.
+	if account.IsCline() && kind == terminalAccountBillingExhausted {
+		return false
+	}
 	if kind != terminalAccountBillingExhausted || statusCode != http.StatusTooManyRequests {
 		return true
 	}
