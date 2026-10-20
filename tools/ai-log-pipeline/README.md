@@ -44,8 +44,9 @@ and metadata backend together before committing archival offsets.
 
 ClickHouse stores searchable metadata, not large bodies. `schema.sql` moves
 recent metadata from SSD to HDD after seven days and deletes detailed event
-indexes after 180 days. Archive catalogs and manifests have no expiry; complete
-events stay in HDD packs. Use `FINAL` or explicit stable-ID deduplication when
+indexes after 180 days. Raw packs, manifests and the archive catalog are kept
+for 30 days once retention is enabled (see "Raw archive retention"); session
+files are the long-term copy. Use `FINAL` or explicit stable-ID deduplication when
 querying ReplacingMergeTree tables, especially for counts and accounting.
 
 ## Deployment
@@ -124,6 +125,81 @@ events, worker status timestamps, under-replicated partitions, certificates,
 archive checksums and disk free space. Permanent retention requires expanding
 storage as it fills; it cannot be guaranteed by a fixed-size RAID volume. Keep
 an independent copy of bulk archives in addition to OS/metadata backups.
+
+## Session compaction (one file per conversation)
+
+The pack archive keeps every transport event. Agents resend the whole history
+on every turn and requests fail, retry or get cancelled, so most of those bytes
+are repeats or fragments. `sessionizer.py` (consumer group
+`ai-sessionizer-main`) turns the clean stream into one `.jsonl.zst` file per
+conversation:
+
+1. Events are reassembled into captures (one client request). Only a capture
+   with status 200, a complete request body, no cancel/write failure, no
+   sequence gap and a terminal response event (`response.completed`,
+   `message_stop`, `[DONE]`) becomes a turn. Everything else is counted by
+   reason (`http_502`, `aborted`, `response_incomplete`, `route:...`) and not
+   stored. Upstream copies of the same bodies are counted, not stored.
+2. `turns.py` hashes each input/output item in the shape clients echo it back
+   (`cache_control`, empty/null fields, response-only `status`/`metadata` are
+   ignored; string content equals a single text block). Node id =
+   `H(parent id, item hash)`, as in vLLM's prefix-cache block hashes.
+3. `sessions.py` inserts every turn's input+output path into a tree. A request
+   whose content is a prefix of a later request adds no nodes; forks, retries
+   and regenerations become branches; subagents and compaction restarts
+   become extra roots of the same session.
+4. A turn joins a session through the deepest shared model-generated node of
+   at least 128 bytes (fork/resume lineage, scoped to source and user), else
+   through the client session id (`metadata.user_id.session_id` from Claude
+   Code, `session-id`/`thread-id` from Codex, `prompt_cache_key`). Shared
+   prompts alone (CLAUDE.md, tool lists) never join conversations. Sessions
+   without any client id are marked `inferred`.
+5. A session is written when it has been idle for `idle_flush_seconds` (30 min)
+   and rewritten in place if it continues within `reopen_window_seconds`
+   (7 days). After that window its SSD state is sealed; a later continuation
+   starts a new file with `resumed_from`.
+
+File layout: `<output_root>/source=<id>/dt=<first day, UTC+8>/<session>.jsonl.zst`
+and a per-day catalog `_catalog/dt=<day>.parquet`. Lines, in order:
+
+| type | content |
+|-|-|
+| `session` | ids, time range, `client_session_ids`, `inferred`, `resumed_from`, `merged_from`, counts, `leaves`, `branch_points`, models, dropped requests by reason |
+| `context` | system/instructions/tools, deduplicated by hash |
+| `node` | `id`, `parent`, `origin` (input/output), producing `turn`, original `item` |
+| `turn` | per request: capture id, times, models, usage (without the per-item `attribution` breakdown), stop reason, params, `context`, `input_leaf`, `output_leaf` |
+
+`python session_tool.py verify FILE...` recomputes every node id from the
+stored items; `python session_tool.py export FILE [--all]` prints one linear
+conversation per leaf (or per turn).
+
+State lives in SQLite (WAL, `synchronous=FULL`) on SSD together with the
+consumed offsets, so a restart resumes exactly; files are rewritten from that
+state and the filesystem is synced before sessions are marked clean. Run
+`sessionizer.py backfill` once to replay archived packs; it records the same
+Kafka offsets and the live `kafka` mode refuses to start until the backfill
+has completed. Kafka offsets that fell out of retention stop the consumer
+(`auto.offset.reset=error`) rather than skipping data. Only events with a
+verified source binding are processed.
+
+## Raw archive retention
+
+`archive_retention.py` (`ai-archive-retention.timer`, daily, on the archive
+host with the archiver's S3 identity) deletes packs uploaded more than 30 days
+ago, manifest first. It only deletes a pack when the sessionizer's exported
+metrics are fresh, report a completed backfill, and show every offset of the
+pack as durably consumed; otherwise it deletes nothing and records the packs
+as blocked. `--dry-run` reports what it would delete. The archive catalog
+tables expire on the same horizon (`ALTER ... MODIFY TTL ... + INTERVAL 30 DAY
+DELETE`; catalog rows always expire no later than their pack), so the query API
+stops listing captures before their packs disappear. Freed SeaweedFS volume
+space returns after volume vacuum (garbage above 30% per volume) and the
+weekly `fstrim`.
+
+What exists only in raw packs, and is gone after 30 days: failed, cancelled and
+incomplete requests; image, embedding, search and token-count routes;
+WebSocket traffic; upstream attempts and retries; streaming chunk timing and
+raw SSE frames; `usage.attribution`.
 
 ## Source registration control plane
 

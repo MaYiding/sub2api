@@ -171,7 +171,7 @@ stage_data() {
 }
 
 build_env_args() {
-  local env_value active_capture_enabled="" active_capture_source="" active_capture_max=""
+  local env_value active_capture_enabled="" active_capture_source="" active_capture_max="" active_capture_upstream=""
   ENV_ARGS=()
   while IFS= read -r env_value; do
     [[ -n "$env_value" ]] || continue
@@ -180,6 +180,7 @@ build_env_args() {
       AI_LOG_ENABLED=*) active_capture_enabled="${env_value#*=}"; continue ;;
       AI_LOG_SOURCE_ID=*) active_capture_source="${env_value#*=}"; continue ;;
       AI_LOG_SPOOL_MAX_BYTES=*) active_capture_max="${env_value#*=}"; continue ;;
+      AI_LOG_UPSTREAM_BODIES=*) active_capture_upstream="${env_value#*=}"; continue ;;
       AI_LOG_SPOOL_DIR=*) continue ;;
     esac
     ENV_ARGS+=(--env "$env_value")
@@ -188,6 +189,7 @@ build_env_args() {
   local capture_enabled="${AI_LOG_ENABLED:-$active_capture_enabled}"
   local capture_source="${AI_LOG_SOURCE_ID:-$active_capture_source}"
   local capture_max="${AI_LOG_SPOOL_MAX_BYTES:-$active_capture_max}"
+  local capture_upstream="${AI_LOG_UPSTREAM_BODIES:-$active_capture_upstream}"
   if [[ -n "$capture_enabled" ]]; then
     [[ "$capture_enabled" == true || "$capture_enabled" == false ]] || die "AI_LOG_ENABLED must be true or false"
     ENV_ARGS+=(--env "AI_LOG_ENABLED=$capture_enabled")
@@ -197,6 +199,10 @@ build_env_args() {
   fi
   if [[ -n "$capture_max" ]]; then
     ENV_ARGS+=(--env "AI_LOG_SPOOL_MAX_BYTES=$capture_max")
+  fi
+  if [[ -n "$capture_upstream" ]]; then
+    [[ "$capture_upstream" == true || "$capture_upstream" == false ]] || die "AI_LOG_UPSTREAM_BODIES must be true or false"
+    ENV_ARGS+=(--env "AI_LOG_UPSTREAM_BODIES=$capture_upstream")
   fi
   if [[ "$capture_enabled" == true ]]; then
     local capture_spool="${SUB2API_AI_LOG_SPOOL_HOST_DIR:-}"

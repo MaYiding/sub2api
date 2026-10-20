@@ -18,10 +18,35 @@ import (
 
 const maxQueuedBytes = 32 << 20
 
+// Captures with writer-side losses are remembered until their capture.end is
+// written; entries whose end never arrives (lost at enqueue) are forgotten
+// after a day. Sequence gaps remain the authoritative completeness check.
+const (
+	maxLossCaptures = 65536
+	lossEntryTTL    = 24 * time.Hour
+)
+
+// UpstreamBodiesEnv opts into copying upstream request/response bodies. By
+// default upstream attempts record status, byte counts and SHA-256 only: the
+// client-facing request and response already hold the conversation.
+const UpstreamBodiesEnv = "AI_LOG_UPSTREAM_BODIES"
+
+type walRecord struct {
+	data    []byte
+	capture string
+	end     *Event // capture.end, re-encoded when this capture lost earlier events in the writer
+}
+
+type lossEntry struct {
+	events uint64
+	seen   time.Time
+}
+
 type WAL struct {
 	dir       string
 	maxBytes  int64
-	queue     chan []byte
+	bodies    bool
+	queue     chan walRecord
 	queued    atomic.Int64
 	dropped   atomic.Uint64
 	stop      chan struct{}
@@ -47,6 +72,14 @@ func Default() (*WAL, string) {
 		if dir == "" || !filepath.IsAbs(dir) || defaultSource == "" || len(defaultSource) > 128 {
 			panic("AI_LOG_ENABLED requires an absolute AI_LOG_SPOOL_DIR and AI_LOG_SOURCE_ID (1..128 bytes)")
 		}
+		bodies := false
+		switch value := os.Getenv(UpstreamBodiesEnv); value {
+		case "", "false":
+		case "true":
+			bodies = true
+		default:
+			panic(UpstreamBodiesEnv + " must be true or false")
+		}
 		maxBytes := int64(20 << 30)
 		if value := os.Getenv("AI_LOG_SPOOL_MAX_BYTES"); value != "" {
 			var err error
@@ -60,6 +93,7 @@ func Default() (*WAL, string) {
 		if err != nil {
 			panic(fmt.Errorf("initialize AI log WAL: %w", err))
 		}
+		defaultWAL.bodies = bodies
 	})
 	return defaultWAL, defaultSource
 }
@@ -81,7 +115,7 @@ func NewWAL(dir string, maxBytes int64) (*WAL, error) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		return nil, err
 	}
-	w := &WAL{dir: dir, maxBytes: maxBytes, queue: make(chan []byte, 1024), stop: make(chan struct{}), done: make(chan struct{})}
+	w := &WAL{dir: dir, maxBytes: maxBytes, queue: make(chan walRecord, 1024), stop: make(chan struct{}), done: make(chan struct{})}
 	// Verify write access synchronously, before accepting requests.
 	f, err := os.CreateTemp(dir, ".write-check-")
 	if err != nil {
@@ -102,6 +136,9 @@ func NewWAL(dir string, maxBytes int64) (*WAL, error) {
 	go w.run()
 	return w, nil
 }
+
+// UpstreamBodies reports whether upstream attempt bodies are copied.
+func (w *WAL) UpstreamBodies() bool { return w != nil && w.bodies }
 
 func (w *WAL) Submit(e Event) bool {
 	if w == nil {
@@ -124,9 +161,13 @@ func (w *WAL) Submit(e Event) bool {
 		w.dropped.Add(1)
 		return false
 	}
+	record := walRecord{data: b, capture: e.CaptureID}
+	if e.Kind == "capture.end" {
+		record.end = &e
+	}
 	select {
 	case <-w.stop:
-	case w.queue <- b:
+	case w.queue <- record:
 		return true
 	default:
 	}
@@ -207,10 +248,31 @@ func (w *WAL) run() {
 		segmentBytes = 0
 	}
 	defer rotate()
-	write := func(b []byte) {
-		defer w.queued.Add(-int64(len(b)))
+	// Per-capture writer losses, reported in that capture's capture.end. The
+	// queue is FIFO, so the end is written after every earlier event.
+	losses := map[string]lossEntry{}
+	lose := func(r walRecord) {
+		w.dropped.Add(1)
+		if r.end != nil || r.capture == "" {
+			return
+		}
+		entry, ok := losses[r.capture]
+		if !ok && len(losses) >= maxLossCaptures {
+			return
+		}
+		losses[r.capture] = lossEntry{events: entry.events + 1, seen: time.Now()}
+	}
+	write := func(r walRecord) {
+		defer w.queued.Add(-int64(len(r.data)))
+		b := r.data
+		if r.end != nil {
+			if entry, ok := losses[r.capture]; ok {
+				delete(losses, r.capture)
+				b = withWALDrops(*r.end, entry.events, b)
+			}
+		}
 		if usageErr != nil || usage+int64(len(b)) > w.maxBytes {
-			w.dropped.Add(1)
+			lose(r)
 			report(errors.New("AI log spool capacity exceeded or unavailable"))
 			return
 		}
@@ -226,7 +288,7 @@ func (w *WAL) run() {
 					_ = f.Close()
 					f = nil
 				}
-				w.dropped.Add(1)
+				lose(r)
 				report(err)
 				return
 			}
@@ -235,7 +297,7 @@ func (w *WAL) run() {
 		usage += int64(n)
 		segmentBytes += int64(n)
 		if err != nil {
-			w.dropped.Add(1)
+			lose(r)
 			report(err)
 			// Remove a partial JSON line so the following event stays parseable.
 			if truncErr := f.Truncate(segmentBytes - int64(n)); truncErr != nil {
@@ -249,23 +311,43 @@ func (w *WAL) run() {
 	}
 	for {
 		select {
-		case b := <-w.queue:
-			write(b)
-		case <-ticker.C:
+		case r := <-w.queue:
+			write(r)
+		case now := <-ticker.C:
 			rotate()
 			usage, usageErr = w.diskUsage()
+			for id, entry := range losses {
+				if now.Sub(entry.seen) > lossEntryTTL {
+					delete(losses, id)
+				}
+			}
 			if w.dropped.Load() > 0 {
 				report(errors.New("capture loss counter is nonzero; inspect source spool and shipper"))
 			}
 		case <-w.stop:
 			for {
 				select {
-				case b := <-w.queue:
-					write(b)
+				case r := <-w.queue:
+					write(r)
 				default:
 					return
 				}
 			}
 		}
 	}
+}
+
+// withWALDrops adds the writer-side loss count to a capture.end record.
+func withWALDrops(end Event, lost uint64, fallback []byte) []byte {
+	metadata := make(map[string]any, len(end.Metadata)+1)
+	for key, value := range end.Metadata {
+		metadata[key] = value
+	}
+	metadata["wal_dropped_events"] = lost
+	end.Metadata = metadata
+	b, err := json.Marshal(end)
+	if err != nil {
+		return fallback
+	}
+	return append(b, '\n')
 }

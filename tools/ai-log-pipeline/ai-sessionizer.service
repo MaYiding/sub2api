@@ -1,0 +1,26 @@
+[Unit]
+Description=AI log session compaction (Kafka clean -> one file per conversation)
+After=network-online.target ai-logs-ingress.service ai-sessionizer-backfill.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+RequiresMountsFor=/srv/ai-sessions/state /srv/ai-sessions/data
+[Service]
+User=ailog
+Group=ailog
+WorkingDirectory=/opt/ai-log-pipeline/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/ai-log-pipeline/venv/bin/python /opt/ai-log-pipeline/src/sessionizer.py kafka --config /etc/ai-logs/pipeline/sessionizer.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=300
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-log-pipeline /srv/ai-sessions/state /srv/ai-sessions/data
+MemoryMax=12G
+CPUQuota=300%
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,6 @@ import sqlite3
 import os
 from pathlib import Path
 import re
-import socket
 import subprocess
 import time
 
@@ -20,21 +19,39 @@ def run(args):
     if result.returncode:raise RuntimeError('metric command failed')
     return result.stdout
 
-hostname=socket.gethostname()
-roles={'ai-kafka-01':['ai-kafka'],'ai-kafka-02':['ai-kafka'],'ai-kafka-03':['ai-kafka'],
-       'ai-cleaner-01':['ai-log-cleaner'],'ai-query-01':['clickhouse-server','ai-log-indexer','ai-log-api','ai-log-control','ai-log-provisioner'],'ai-archive-01':['ai-archive','ai-log-archiver']}[hostname]
+def broker_config(path='/etc/kafka/server.properties'):
+    lines=Path(path).read_text().splitlines() if Path(path).exists() else []
+    return dict(line.split('=',1) for line in lines if '=' in line and not line.lstrip().startswith('#'))
+def local_bootstrap(config):
+    """This broker's advertised inter-broker listener."""
+    name=config['inter.broker.listener.name'].strip()
+    for listener in config['advertised.listeners'].split(','):
+        if listener.strip().startswith(name+'://'):return listener.strip()[len(name)+3:]
+    raise RuntimeError('inter-broker listener is not advertised')
+
+# A host's roles are the pipeline units installed on it.
+UNITS=['ai-kafka','ai-log-cleaner','clickhouse-server','ai-log-indexer','ai-log-api','ai-log-control','ai-log-provisioner','ai-archive','ai-log-archiver','ai-sessionizer']
+roles=[unit for unit in UNITS if subprocess.run(['systemctl','show','-p','LoadState','--value',unit+'.service'],capture_output=True,text=True).stdout.strip()=='loaded']
+broker=broker_config()
 for unit in roles:
     result=subprocess.run(['systemctl','is-active',unit],capture_output=True,text=True)
-    metric('service_up',int(result.returncode==0),unit=unit)
-for role in ['cleaner','indexer','archiver']:
+    up=result.returncode==0
+    if unit=='ai-sessionizer' and not up:
+        # The one-off backfill runs first and hands over to the live unit.
+        up=subprocess.run(['systemctl','is-active','ai-sessionizer-backfill'],capture_output=True,text=True).stdout.strip() in ('active','activating')
+    metric('service_up',int(up),unit=unit)
+for role in ['cleaner','indexer','archiver','sessionizer','retention']:
     path=Path('/var/lib/ai-log-pipeline/'+role+'-status.json')
     if path.exists():
         try:
             data=json.loads(path.read_text())
             for name,value in data.items():
                 if type(value) in (int,float):metric('worker_'+name,value,component=role)
+            for pair,value in (data.get('offsets') or {}).items():
+                topic,partition=pair.rsplit('/',1)
+                metric('worker_offset',int(value),component=role,topic=topic,partition=partition)
         except Exception:metric('worker_status_readable',0,component=role)
-if hostname=='ai-query-01':
+if 'ai-log-provisioner' in roles:
     try:
         data=json.loads(Path('/var/lib/ai-log-control/provisioner-status.json').read_text())
         for name,value in data.items():
@@ -49,13 +66,13 @@ if hostname=='ai-query-01':
                 metric('source_pending_job_age_seconds',int(time.time())-created,source_id=sid)
         metric('control_registry_readable',1)
     except Exception:metric('control_registry_readable',0)
-for path in ['/srv/ai-logs/kafka','/srv/ai-logs/archive','/srv/ai-logs/metadata','/srv/ai-logs/clickhouse-hot','/srv/ai-logs/clickhouse-cold','/srv/ai-logs/state']:
+for path in ['/srv/ai-logs/kafka','/srv/ai-logs/archive','/srv/ai-logs/metadata','/srv/ai-logs/clickhouse-hot','/srv/ai-logs/clickhouse-cold','/srv/ai-logs/state','/srv/ai-sessions/state','/srv/ai-sessions/data']:
     if Path(path).is_mount():
         info=os.statvfs(path)
         metric('disk_available_bytes',info.f_bavail*info.f_frsize,mount=path)
         metric('disk_size_bytes',info.f_blocks*info.f_frsize,mount=path)
 certificates=[Path('/etc/kafka/tls/public-cert.pem'),Path('/etc/kafka/tls/internal-cert.pem'),Path('/etc/ai-logs/seaweed/archive.crt')]
-for role in ['cleaner','indexer','archiver']:certificates.append(Path('/etc/ai-logs/pipeline/'+role+'.crt'))
+for role in ['cleaner','indexer','archiver','sessionizer']:certificates.append(Path('/etc/ai-logs/pipeline/'+role+'.crt'))
 for path in certificates:
     if path.exists():
         try:
@@ -63,9 +80,11 @@ for path in certificates:
             expires=datetime.strptime(text,'%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc).timestamp()
             metric('certificate_expiry_timestamp',int(expires),certificate=path.name)
         except Exception:metric('certificate_readable',0,certificate=path.name)
-if hostname=='ai-kafka-01':
+# Cluster-wide Kafka metrics come from the voter with the lowest node id only.
+voters=[int(voter.split('@')[0]) for voter in broker.get('controller.quorum.voters','').split(',') if '@' in voter]
+if broker.get('node.id','').strip().isdigit() and voters and int(broker['node.id'])==min(voters):
     try:
-        args=['--bootstrap-server','10.10.20.230:9092','--command-config','/etc/kafka/admin.properties']
+        args=['--bootstrap-server',local_bootstrap(broker),'--command-config','/etc/kafka/admin.properties']
         description=run(['/opt/kafka/bin/kafka-topics.sh']+args+['--describe','--topic','ai\..*'])
         counts=[len(value.split(',')) for value in re.findall(r'Isr:\s*([0-9,]+)',description)]
         assert len(counts)>=18
@@ -82,7 +101,7 @@ if hostname=='ai-kafka-01':
                 if fields[3].isdigit():metric('kafka_committed_offset',int(fields[3]),**labels)
         metric('kafka_collector_success',1)
     except Exception:metric('kafka_collector_success',0)
-if hostname.startswith('ai-kafka-'):
+if 'ai-kafka' in roles:
     check=Path('/etc/kafka/tls/certificate-checked-at')
     if check.exists():metric('certificate_distribution_last_success_timestamp',int(check.read_text()))
     root=Path('/srv/ai-logs/kafka/data')

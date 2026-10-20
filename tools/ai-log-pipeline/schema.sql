@@ -17,7 +17,8 @@ TTL toDateTime(event_time) + INTERVAL 7 DAY TO VOLUME 'cold',
     toDateTime(event_time) + INTERVAL 180 DAY DELETE
 SETTINGS storage_policy = 'ai_logs';
 
--- Permanent small catalog; bodies remain in the independent HDD archive packs.
+-- Small catalog of archive packs; with raw archive retention enabled it expires
+-- with the packs (see the MODIFY TTL statements at the end).
 CREATE TABLE IF NOT EXISTS ai_logs.archive_catalog
 (
     tenant_id LowCardinality(String), source_id LowCardinality(String),
@@ -70,3 +71,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS ai_logs.source_activity_archive_mv TO ai_
 SELECT tenant_id,source_id,'archive' AS kind,today() AS day,maxState(now64(3,'UTC')) AS seen_at,
  sumState(toUInt64(event_count)) AS events,sumState(toUInt64(0)) AS body_bytes
 FROM ai_logs.archive_catalog GROUP BY tenant_id,source_id;
+
+-- Raw archive retention (30 days; session files are the long-term copy). Catalog
+-- rows expire no later than the packs that archive_retention.py deletes.
+ALTER TABLE ai_logs.archive_catalog MODIFY TTL toDateTime(first_time) + INTERVAL 7 DAY TO VOLUME 'cold', toDateTime(first_time) + INTERVAL 30 DAY DELETE;
+ALTER TABLE ai_logs.archive_segments MODIFY TTL toDateTime(created_at) + INTERVAL 7 DAY TO VOLUME 'cold', toDateTime(created_at) + INTERVAL 30 DAY DELETE;

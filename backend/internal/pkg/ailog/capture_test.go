@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 type testSink struct {
@@ -124,5 +125,65 @@ func TestWALRejectsSymlinkDirectory(t *testing.T) {
 	if w, err := NewWAL(link, 64<<20); err == nil {
 		w.Close()
 		t.Fatal("accepted symlink WAL")
+	}
+}
+
+func TestWALReportsWriterLossInCaptureEnd(t *testing.T) {
+	dir := t.TempDir()
+	filler := filepath.Join(dir, "filler.ready")
+	if err := os.WriteFile(filler, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filler, 64<<20); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWAL(dir, 64<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Accepted into the queue, then lost by the writer: the spool is full.
+	lost := New(w, "source", "", nil)
+	lost.Record("http.request.body", []byte("lost"), nil)
+	other := New(w, "source", "", nil)
+	other.Record("http.request.body", []byte("lost too"), nil)
+	for deadline := time.Now().Add(5 * time.Second); w.dropped.Load() < 4; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("writer did not process the full spool")
+		}
+	}
+	if err := os.Remove(filler); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2500 * time.Millisecond) // the writer re-reads spool usage every second
+	lost.Finish(nil)
+	clean := New(w, "source", "", nil)
+	clean.Finish(nil)
+	w.Close()
+	ends := map[string]Event{}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.ready"))
+	for _, name := range files {
+		content, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range bytes.Split(bytes.TrimSpace(content), []byte("\n")) {
+			var e Event
+			if err := json.Unmarshal(line, &e); err != nil {
+				t.Fatal(err)
+			}
+			if e.Kind == "capture.end" {
+				ends[e.CaptureID] = e
+			}
+		}
+	}
+	end, ok := ends[lost.id]
+	if !ok || end.Metadata["wal_dropped_events"] != float64(2) || end.Metadata["dropped_events"] != float64(0) {
+		t.Fatalf("writer loss not attributed: %v", end.Metadata)
+	}
+	if _, ok := ends[clean.id].Metadata["wal_dropped_events"]; ok {
+		t.Fatal("clean capture reported loss")
+	}
+	if _, ok := ends[other.id]; ok {
+		t.Fatal("unfinished capture has an end")
 	}
 }

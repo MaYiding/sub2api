@@ -1,0 +1,25 @@
+[Unit]
+Description=AI log session backfill from archived packs (one-off, before live consumption)
+After=network-online.target ai-logs-ingress.service
+Wants=network-online.target
+RequiresMountsFor=/srv/ai-sessions/state /srv/ai-sessions/data
+# Continue with live Kafka consumption from the offsets the backfill stored.
+OnSuccess=ai-sessionizer.service
+[Service]
+User=ailog
+Group=ailog
+WorkingDirectory=/opt/ai-log-pipeline/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/ai-log-pipeline/venv/bin/python /opt/ai-log-pipeline/src/sessionizer.py backfill --config /etc/ai-logs/pipeline/sessionizer.json
+Type=oneshot
+TimeoutStartSec=infinity
+TimeoutStopSec=300
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-log-pipeline /srv/ai-sessions/state /srv/ai-sessions/data
+MemoryMax=12G
+CPUQuota=300%
+LimitNOFILE=65536

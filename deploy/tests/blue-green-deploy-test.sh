@@ -53,7 +53,7 @@ docker_inspect_value() {
 }
 ACTIVE_DATA_DIR=/test/app-data
 STAGING_ROOT=/test/staging
-unset AI_LOG_ENABLED AI_LOG_SOURCE_ID AI_LOG_SPOOL_MAX_BYTES SUB2API_AI_LOG_SPOOL_HOST_DIR
+unset AI_LOG_ENABLED AI_LOG_SOURCE_ID AI_LOG_SPOOL_MAX_BYTES AI_LOG_UPSTREAM_BODIES SUB2API_AI_LOG_SPOOL_HOST_DIR
 build_env_args
 if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fq '/app/ai-log-spool:z'; then
   echo 'disabled capture must not add a mount' >&2; exit 1
@@ -76,4 +76,22 @@ build_env_args
 if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fq '/app/ai-log-spool:z'; then
   echo 'explicit rollback must disable the capture mount' >&2; exit 1
 fi
+# The upstream body switch is inherited and can be overridden per rollout.
+unset AI_LOG_ENABLED
+mock_upstream=true
+docker_inspect_value() {
+  case "$2" in
+    *Config.Env*) printf '%s\n' AI_LOG_ENABLED=true AI_LOG_SOURCE_ID=existing-source "AI_LOG_UPSTREAM_BODIES=$mock_upstream" ;;
+    *Mounts*) printf '%s\n' "$capture_dir" ;;
+  esac
+}
+build_env_args
+printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_UPSTREAM_BODIES=true'
+AI_LOG_UPSTREAM_BODIES=false
+build_env_args
+printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_UPSTREAM_BODIES=false'
+if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_UPSTREAM_BODIES=true'; then
+  echo 'inherited upstream body setting must not shadow the override' >&2; exit 1
+fi
+unset AI_LOG_UPSTREAM_BODIES
 echo 'blue-green shared AI log spool test passed'

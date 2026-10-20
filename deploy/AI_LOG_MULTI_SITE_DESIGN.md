@@ -1,8 +1,8 @@
 # Sub2API 多来源日志接入
 
-2026-10-09：第一阶段已实现，中央服务部署在 VM624。两个部署合计每天 50–100 GB 压缩前日志，共用 Kafka、清洗服务、ClickHouse 和 HDD R6 归档。公网 Sub2API 的实际安装和蓝绿发布仍需按各站点配置执行。
+2026-10-09：第一阶段已实现，中央服务部署在中央查询主机。两个部署合计每天 50–100 GB 压缩前日志，共用 Kafka、清洗服务、ClickHouse 和 HDD 归档。公网 Sub2API 的实际安装和蓝绿发布仍需按各站点配置执行。
 
-入口为 `https://logs.kafka.infra.qingtianji.com/admin/sources`，需要内网或 VPN，并使用独立的日志平台管理员账号。两地运行同一个分支；差异是 source_id、Kafka 账号、原始 Topic 和心跳 token。历史[架构参考图](ai-log-multi-site.drawio)保留供编辑。
+入口为 `https://<中央日志平台>/admin/sources`（地址由系统管理员提供），需要内网或 VPN，并使用独立的日志平台管理员账号。两地运行同一个分支；差异是 source_id、Kafka 账号、原始 Topic 和心跳 token。历史[架构参考图](ai-log-multi-site.drawio)保留供编辑。
 
 ## 注册与接入
 
@@ -67,9 +67,9 @@ Kafka 的 SCRAM 更新主要作用于后续连接，不能把“改了密码”�
 
 ## 中央服务部署与恢复
 
-- VM624：`ai-log-control`（ailogweb，8081）接受管理员操作和来源心跳；`ai-log-provisioner`（ailogprov）串行执行幂等作业、观察 HDD 探测并在线备份注册库。
-- VM620：root 所有的 `provision_remote.py --role kafka` helper，通过强制 SSH 命令调用本机 Kafka 管理工具。密码经私有临时属性文件传递，不放入 argv。
-- VM623：`--role bindings` helper 校验并原子发布来源绑定，禁止删掉历史绑定或回退版本。清洗器在 Kafka 事务之间热加载，新增来源无需重启 broker。
+- 中央查询主机：`ai-log-control`（ailogweb，8081）接受管理员操作和来源心跳；`ai-log-provisioner`（ailogprov）串行执行幂等作业、观察 HDD 探测并在线备份注册库。
+- Kafka broker 主机：root 所有的 `provision_remote.py --role kafka` helper，通过强制 SSH 命令调用本机 Kafka 管理工具。密码经私有临时属性文件传递，不放入 argv。
+- 清洗主机：`--role bindings` helper 校验并原子发布来源绑定，禁止删掉历史绑定或回退版本。清洗器在 Kafka 事务之间热加载，新增来源无需重启 broker。
 - Web 无 SSH helper 私钥、Kafka 管理证书或查询 token。provisioner 仅持有来源固定、禁端口转发、固定命令的两把 SSH 密钥。
 - SQLite 位于 `/var/lib/ai-log-control/registry.sqlite`，使用 WAL + FULL。`sources / credentials / jobs / requests / audit / sessions` 保存小量注册数据；`topic_ready` 防止提前订阅未完成的注册。每日 PBS 系统盘备份覆盖该目录与配置，在线 SQLite 备份每小时写入 `backup/registry.sqlite`。
 - 解密密钥位于 `/etc/ai-log-control/encryption.key`。数据库与密钥分文件且受权限保护；当前都随受控的加密系统盘备份保存，并非独立故障域。恢复时同时恢复密钥、核对 Kafka 实际 ACL/账号和绑定，不无条件重置现有密码。
