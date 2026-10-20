@@ -321,7 +321,10 @@ def run(config, mode):
                 touched |= recent_days(store, clock)
                 last_gc = clock
             if now-last_status >= 15:
-                counters.update(store.stats(), updated_at=int(time.time()), clock=int(clock), open_captures=len(captures.open))
+                counters.update(store.stats(), updated_at=int(time.time()), clock=int(clock), open_captures=len(captures.open),
+                                backfill_complete=int(bool(store.get_meta('backfill_complete'))),
+                                # Durably consumed offsets: archive retention never deletes packs above these.
+                                offsets={'%s/%d' % pair: offset for pair, offset in store.offsets().items()})
                 write_status(config, counters)
                 last_status = now
         store.commit(captures.watermarks())
@@ -333,7 +336,8 @@ def run(config, mode):
                 pass
             write_catalog(store, config['output_root'], recent_days(store, clock, 400))
             store.set_meta('backfill_complete', datetime.now(timezone.utc).isoformat())
-            counters.update(store.stats(), updated_at=int(time.time()), clock=int(clock), open_captures=len(captures.open), backfill_complete=1)
+            counters.update(store.stats(), updated_at=int(time.time()), clock=int(clock), open_captures=len(captures.open), backfill_complete=1,
+                            offsets={'%s/%d' % pair: offset for pair, offset in store.offsets().items()})
             write_status(config, counters)
     finally:
         source.close()

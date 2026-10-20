@@ -31,13 +31,16 @@ for unit in roles:
         # The one-off backfill runs first and hands over to the live unit.
         up=subprocess.run(['systemctl','is-active','ai-sessionizer-backfill'],capture_output=True,text=True).stdout.strip() in ('active','activating')
     metric('service_up',int(up),unit=unit)
-for role in ['cleaner','indexer','archiver','sessionizer']:
+for role in ['cleaner','indexer','archiver','sessionizer','retention']:
     path=Path('/var/lib/ai-log-pipeline/'+role+'-status.json')
     if path.exists():
         try:
             data=json.loads(path.read_text())
             for name,value in data.items():
                 if type(value) in (int,float):metric('worker_'+name,value,component=role)
+            for pair,value in (data.get('offsets') or {}).items():
+                topic,partition=pair.rsplit('/',1)
+                metric('worker_offset',int(value),component=role,topic=topic,partition=partition)
         except Exception:metric('worker_status_readable',0,component=role)
 if hostname=='ai-query-01':
     try:

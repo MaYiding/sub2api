@@ -1,0 +1,18 @@
+[Unit]
+Description=Expire raw AI log archive packs already compacted into session files
+After=network-online.target ai-archive.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=ailog
+Group=ailog
+WorkingDirectory=/opt/ai-log-pipeline/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/ai-log-pipeline/venv/bin/python /opt/ai-log-pipeline/src/archive_retention.py --config /etc/ai-logs/pipeline/archiver.json --days 30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ai-log-pipeline
+Nice=10

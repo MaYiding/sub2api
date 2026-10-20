@@ -44,8 +44,9 @@ and metadata backend together before committing archival offsets.
 
 ClickHouse stores searchable metadata, not large bodies. `schema.sql` moves
 recent metadata from SSD to HDD after seven days and deletes detailed event
-indexes after 180 days. Archive catalogs and manifests have no expiry; complete
-events stay in HDD packs. Use `FINAL` or explicit stable-ID deduplication when
+indexes after 180 days. Raw packs, manifests and the archive catalog are kept
+for 30 days once retention is enabled (see "Raw archive retention"); session
+files are the long-term copy. Use `FINAL` or explicit stable-ID deduplication when
 querying ReplacingMergeTree tables, especially for counts and accounting.
 
 ## Deployment
@@ -180,6 +181,25 @@ Kafka offsets and the live `kafka` mode refuses to start until the backfill
 has completed. Kafka offsets that fell out of retention stop the consumer
 (`auto.offset.reset=error`) rather than skipping data. Only events with a
 verified source binding are processed.
+
+## Raw archive retention
+
+`archive_retention.py` (`ai-archive-retention.timer`, daily, on the archive
+host with the archiver's S3 identity) deletes packs uploaded more than 30 days
+ago, manifest first. It only deletes a pack when the sessionizer's exported
+metrics are fresh, report a completed backfill, and show every offset of the
+pack as durably consumed; otherwise it deletes nothing and records the packs
+as blocked. `--dry-run` reports what it would delete. The archive catalog
+tables expire on the same horizon (`ALTER ... MODIFY TTL ... + INTERVAL 30 DAY
+DELETE`; catalog rows always expire no later than their pack), so the query API
+stops listing captures before their packs disappear. Freed SeaweedFS volume
+space returns after volume vacuum (garbage above 30% per volume) and the
+weekly `fstrim`.
+
+What exists only in raw packs, and is gone after 30 days: failed, cancelled and
+incomplete requests; image, embedding, search and token-count routes;
+WebSocket traffic; upstream attempts and retries; streaming chunk timing and
+raw SSE frames; `usage.attribution`.
 
 ## Source registration control plane
 

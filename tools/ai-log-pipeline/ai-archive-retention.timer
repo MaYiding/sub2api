@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily raw AI log archive retention (30 days)
+[Timer]
+OnCalendar=*-*-* 04:20
+RandomizedDelaySec=20min
+Persistent=true
+[Install]
+WantedBy=timers.target
