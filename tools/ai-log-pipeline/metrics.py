@@ -22,11 +22,16 @@ def run(args):
 
 hostname=socket.gethostname()
 roles={'ai-kafka-01':['ai-kafka'],'ai-kafka-02':['ai-kafka'],'ai-kafka-03':['ai-kafka'],
-       'ai-cleaner-01':['ai-log-cleaner'],'ai-query-01':['clickhouse-server','ai-log-indexer','ai-log-api','ai-log-control','ai-log-provisioner'],'ai-archive-01':['ai-archive','ai-log-archiver']}[hostname]
+       'ai-cleaner-01':['ai-log-cleaner'],'ai-query-01':['clickhouse-server','ai-log-indexer','ai-log-api','ai-log-control','ai-log-provisioner'],'ai-archive-01':['ai-archive','ai-log-archiver'],
+       'ai-session-01':['ai-sessionizer']}[hostname]
 for unit in roles:
     result=subprocess.run(['systemctl','is-active',unit],capture_output=True,text=True)
-    metric('service_up',int(result.returncode==0),unit=unit)
-for role in ['cleaner','indexer','archiver']:
+    up=result.returncode==0
+    if unit=='ai-sessionizer' and not up:
+        # The one-off backfill runs first and hands over to the live unit.
+        up=subprocess.run(['systemctl','is-active','ai-sessionizer-backfill'],capture_output=True,text=True).stdout.strip() in ('active','activating')
+    metric('service_up',int(up),unit=unit)
+for role in ['cleaner','indexer','archiver','sessionizer']:
     path=Path('/var/lib/ai-log-pipeline/'+role+'-status.json')
     if path.exists():
         try:
@@ -49,13 +54,13 @@ if hostname=='ai-query-01':
                 metric('source_pending_job_age_seconds',int(time.time())-created,source_id=sid)
         metric('control_registry_readable',1)
     except Exception:metric('control_registry_readable',0)
-for path in ['/srv/ai-logs/kafka','/srv/ai-logs/archive','/srv/ai-logs/metadata','/srv/ai-logs/clickhouse-hot','/srv/ai-logs/clickhouse-cold','/srv/ai-logs/state']:
+for path in ['/srv/ai-logs/kafka','/srv/ai-logs/archive','/srv/ai-logs/metadata','/srv/ai-logs/clickhouse-hot','/srv/ai-logs/clickhouse-cold','/srv/ai-logs/state','/srv/ai-sessions/state','/srv/ai-sessions/data']:
     if Path(path).is_mount():
         info=os.statvfs(path)
         metric('disk_available_bytes',info.f_bavail*info.f_frsize,mount=path)
         metric('disk_size_bytes',info.f_blocks*info.f_frsize,mount=path)
 certificates=[Path('/etc/kafka/tls/public-cert.pem'),Path('/etc/kafka/tls/internal-cert.pem'),Path('/etc/ai-logs/seaweed/archive.crt')]
-for role in ['cleaner','indexer','archiver']:certificates.append(Path('/etc/ai-logs/pipeline/'+role+'.crt'))
+for role in ['cleaner','indexer','archiver','sessionizer']:certificates.append(Path('/etc/ai-logs/pipeline/'+role+'.crt'))
 for path in certificates:
     if path.exists():
         try:
