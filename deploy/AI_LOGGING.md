@@ -36,7 +36,8 @@ SUB2API_AI_LOG_SPOOL_HOST_DIR=/var/lib/sub2api-ai-log/spool \
 ```
 
 Register each deployment in the [central source manager](AI_LOG_MULTI_SITE_DESIGN.md)
-at `https://logs.kafka.infra.qingtianji.com/admin/sources` (private network/VPN).
+at `https://<central-log-host>/admin/sources` (private network/VPN; the operator
+provides the address).
 Download that source's private `shipper.json`, keep it outside Git with mode
 0600, and replace the example `AI_LOG_SOURCE_ID` above with its generated ID.
 Do not use the historical shared `ingest-default` credentials for a new site.

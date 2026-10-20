@@ -20,11 +20,22 @@ from source_bindings import validate_snapshot
 DEADLINE = None
 
 
+def local_bootstrap(path='/etc/kafka/server.properties'):
+    """This broker's advertised inter-broker listener."""
+    lines = Path(path).read_text().splitlines()
+    config = dict(line.split('=', 1) for line in lines if '=' in line and not line.lstrip().startswith('#'))
+    name = config['inter.broker.listener.name'].strip()
+    for listener in config['advertised.listeners'].split(','):
+        if listener.strip().startswith(name+'://'):
+            return listener.strip()[len(name)+3:]
+    raise RuntimeError('inter-broker listener is not advertised')
+
+
 def run(tool, args):
     timeout = min(75, DEADLINE-time.monotonic()) if DEADLINE else 75
     if timeout <= 0:
         raise TimeoutError('helper deadline exceeded')
-    result = subprocess.run(['/opt/kafka/bin/kafka-'+tool+'.sh', '--bootstrap-server', '10.10.20.230:9092',
+    result = subprocess.run(['/opt/kafka/bin/kafka-'+tool+'.sh', '--bootstrap-server', local_bootstrap(),
                              '--command-config', '/etc/kafka/admin.properties', *args],
                             capture_output=True, timeout=timeout, check=False)
     if result.returncode:

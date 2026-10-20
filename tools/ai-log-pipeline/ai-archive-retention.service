@@ -8,7 +8,9 @@ User=ailog
 Group=ailog
 WorkingDirectory=/opt/ai-log-pipeline/src
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/ai-log-pipeline/venv/bin/python /opt/ai-log-pipeline/src/archive_retention.py --config /etc/ai-logs/pipeline/archiver.json --days 30
+# AI_LOG_PROMETHEUS_URL: the Prometheus that scrapes the sessionizer host.
+EnvironmentFile=/etc/ai-logs/pipeline/retention.env
+ExecStart=/opt/ai-log-pipeline/venv/bin/python /opt/ai-log-pipeline/src/archive_retention.py --config /etc/ai-logs/pipeline/archiver.json --prometheus ${AI_LOG_PROMETHEUS_URL} --days 30
 UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true

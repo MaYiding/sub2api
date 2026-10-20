@@ -8,7 +8,7 @@ pre-backfill sessionizer metrics mean nothing is deleted. The ClickHouse
 archive catalog expires on the same horizon through its table TTL, so the
 query API never lists a capture whose pack is gone.
 
-  python archive_retention.py --config archiver.json [--days 30] [--dry-run]
+  python archive_retention.py --config archiver.json --prometheus URL [--days 30] [--dry-run]
 """
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -116,7 +116,7 @@ def main():
     parser.add_argument('--tenant', default='default')
     parser.add_argument('--days', type=int, default=30)
     parser.add_argument('--max-delete', type=int, default=5000, help='packs per run; about 5 days of traffic')
-    parser.add_argument('--prometheus', default='http://10.10.20.55:9090')
+    parser.add_argument('--prometheus', required=True, help='Prometheus base URL that scrapes the sessionizer host')
     parser.add_argument('--max-status-age', type=int, default=900)
     parser.add_argument('--status', default='/var/lib/ai-log-pipeline/retention-status.json')
     parser.add_argument('--dry-run', action='store_true')
