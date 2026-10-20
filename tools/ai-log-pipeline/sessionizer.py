@@ -303,7 +303,10 @@ def run(config, mode):
             if pending >= 2000 or (pending and now-last_commit >= 5) or now-last_commit >= 30:
                 marks = captures.watermarks()
                 store.commit(marks)
-                source.commit(marks)
+                # Restarts resume from the SQLite watermark (oldest open capture). The
+                # Kafka group only feeds lag alerts, so it gets the read position:
+                # one long stream must not look like a stalled consumer.
+                source.commit(dict(captures.position) if source.live else marks)
                 pending, last_commit = 0, now
             if now-last_flush >= 30 and clock:
                 store.commit(captures.watermarks())
