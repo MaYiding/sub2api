@@ -68,6 +68,9 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(classify(anthropic(msgs, assistant('a'), client_canceled=True))[1], 'aborted')
         partial = capture('/v1/messages', {'messages': msgs}, b'event: message_start\ndata: {}\n\n', ctype='text/event-stream')
         self.assertEqual(classify(partial)[1], 'response_incomplete')
+        expired = anthropic(msgs, assistant('a'))
+        expired['end'] = None
+        self.assertEqual(classify(expired)[1], 'no_end')
 
 
 class StoreTests(unittest.TestCase):

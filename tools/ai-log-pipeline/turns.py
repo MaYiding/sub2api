@@ -255,6 +255,8 @@ def classify(capture):
     except ValueError:
         body = None
     hint = session_hint(api, start, body)
+    if not end:
+        return None, 'no_end', hint  # Expired without capture.end (gateway crash or lost tail).
     if end.get('status') != 200:
         return None, 'http_%s' % end.get('status'), hint
     if end.get('client_canceled') or not end.get('request_body_complete', True) or end.get('response_write_failed'):
