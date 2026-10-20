@@ -233,6 +233,10 @@ def run(config, mode):
         raise SystemExit('another sessionizer (live or backfill) owns this state database') from None
     store = Store(config['state_db'], config['output_root'], config.get('idle_flush_seconds', 1800), config.get('reopen_window_seconds', 7*86400),
                   config.get('max_unflushed_seconds', 6*3600))
+    if mode == 'backfill':
+        # Event time runs ~30x faster than wall time; write each session less often.
+        store.idle_flush = max(store.idle_flush, config.get('backfill_idle_flush_seconds', 6*3600))
+        store.max_unflushed = max(store.max_unflushed, config.get('backfill_max_unflushed_seconds', 48*3600))
     stored = store.offsets()
     if mode == 'kafka' and stored and not store.get_meta('backfill_complete') and not config.get('skip_backfill'):
         raise SystemExit('backfill has not completed; refusing to consume live Kafka from its partial offsets')

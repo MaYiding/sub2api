@@ -166,7 +166,7 @@ and a per-day catalog `_catalog/dt=<day>.parquet`. Lines, in order:
 | `session` | ids, time range, `client_session_ids`, `inferred`, `resumed_from`, `merged_from`, counts, `leaves`, `branch_points`, models, dropped requests by reason |
 | `context` | system/instructions/tools, deduplicated by hash |
 | `node` | `id`, `parent`, `origin` (input/output), producing `turn`, original `item` |
-| `turn` | per request: capture id, times, models, usage, stop reason, params, `context`, `input_leaf`, `output_leaf` |
+| `turn` | per request: capture id, times, models, usage (without the per-item `attribution` breakdown), stop reason, params, `context`, `input_leaf`, `output_leaf` |
 
 `python session_tool.py verify FILE...` recomputes every node id from the
 stored items; `python session_tool.py export FILE [--all]` prints one linear

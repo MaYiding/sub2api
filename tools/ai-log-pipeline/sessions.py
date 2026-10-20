@@ -50,6 +50,14 @@ def instant(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
 
 
+def slim_usage(usage):
+    # Responses usage.attribution is a per-item token breakdown (~20 KB per
+    # turn, a quarter of all output bytes); totals and details are kept.
+    if isinstance(usage, dict) and 'attribution' in usage:
+        return {k: v for k, v in usage.items() if k != 'attribution'}
+    return usage
+
+
 def chunks(values, size=900):
     for start in range(0, len(values), size):
         yield values[start:start+size]
@@ -194,6 +202,7 @@ class Store:
         self.db.execute('INSERT OR IGNORE INTO contexts VALUES(?,?,?)', (session, ctx_id, self.put_blob(ctx_raw)))
         meta = {k: turn[k] for k in ('capture_id', 'api', 'route', 't_start', 't_end', 'request_model', 'model', 'stream', 'usage', 'stop', 'response_id',
                                        'hint', 'window', 'subagent', 'api_key_id', 'group_id', 'params')}
+        meta['usage'] = slim_usage(meta['usage'])
         meta.update(context=ctx_id.hex(), input_leaf=path[n_in-1].hex(), output_leaf=path[-1].hex() if len(path) > n_in else None,
                     n_input=n_in, n_output=len(turn['output']), lineage_depth=depth)
         self.db.execute('INSERT INTO turns VALUES(?,?,?,?)', (turn['capture_id'], session, turn['t_start'], json.dumps(meta, ensure_ascii=False)))
@@ -240,6 +249,8 @@ class Store:
         row = self.db.execute('SELECT source_id, user_id, first_ts, last_ts, version, resumed_from, merged_from, inferred FROM sessions WHERE id=?', (session,)).fetchone()
         source, user, first, last, version, resumed_from, merged_from, inferred = row
         turns = [json.loads(m) for (m,) in self.db.execute('SELECT meta FROM turns WHERE session_id=? ORDER BY t_start, capture_id', (session,))]
+        for t in turns:
+            t['usage'] = slim_usage(t['usage'])
         nodes = self.db.execute('SELECT node_id, parent_id, origin, turn, api, blob FROM nodes WHERE session_id=? ORDER BY seq', (session,)).fetchall()
         children = {}
         for node_id, parent, *_ in nodes:
@@ -272,7 +283,8 @@ class Store:
         target = self.output_root / relative
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
         temp = target.with_name('.' + target.name + '.tmp')
-        params = zstandard.ZstdCompressionParameters.from_level(12, window_log=27, enable_ldm=True)
+        # Level 3 + long-distance matching: within 5% of level 12 on session files, ~7x faster.
+        params = zstandard.ZstdCompressionParameters.from_level(3, window_log=27, enable_ldm=True)
         raw = 0
         with open(temp, 'wb') as handle:
             with zstandard.ZstdCompressor(compression_params=params).stream_writer(handle, closefd=False) as writer:
