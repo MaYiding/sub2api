@@ -8,7 +8,7 @@ import zstandard
 
 from sessionizer import Captures
 from sessions import Store
-from turns import classify, echo_form, item_hash, parse_response
+from turns import canonical, classify, echo_form, item_hash, parse_response
 
 SIG = 'S' * 200  # Thinking signatures/encrypted reasoning make model output unique.
 
@@ -36,7 +36,10 @@ def assistant(text):
 def lines(root, relative):
     with open(Path(root) / relative, 'rb') as handle:
         data = zstandard.ZstdDecompressor().stream_reader(handle).read()
-    return [json.loads(line) for line in data.splitlines()]
+    records = [json.loads(line) for line in data.splitlines()]
+    # Every line, including spliced node/context lines, must be canonical JSON.
+    assert [canonical(r) for r in records] == data.splitlines()
+    return records
 
 
 class TurnTests(unittest.TestCase):

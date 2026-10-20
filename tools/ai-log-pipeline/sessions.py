@@ -272,10 +272,14 @@ class Store:
                   'api_key_ids': sorted({t['api_key_id'] for t in turns if t['api_key_id'] is not None}), 'dropped_requests': dropped,
                   'written_at': datetime.now(timezone.utc).isoformat()}
         yield header
+        # Blobs already hold canonical JSON; splice them into canonical (sorted-key)
+        # lines instead of parsing and re-encoding every item.
         for ctx_id, digest in self.db.execute('SELECT ctx_id, blob FROM contexts WHERE session_id=? ORDER BY ctx_id', (session,)).fetchall():
-            yield {'type': 'context', 'id': ctx_id.hex(), 'value': json.loads(self.get_blob(digest))}
+            yield b'{"id":"%s","type":"context","value":%s}' % (ctx_id.hex().encode(), self.get_blob(digest))
         for node_id, parent, origin, turn, api, digest in nodes:
-            yield {'type': 'node', 'id': node_id.hex(), 'parent': parent.hex() if parent else None, 'api': api, 'origin': origin, 'turn': turn, 'item': json.loads(self.get_blob(digest))}
+            yield b'{"api":%s,"id":"%s","item":%s,"origin":%s,"parent":%s,"turn":%s,"type":"node"}' % (
+                canonical(api), node_id.hex().encode(), self.get_blob(digest), canonical(origin),
+                canonical(parent.hex() if parent else None), canonical(turn))
         for t in turns:
             yield dict(t, type='turn')
 
@@ -291,7 +295,7 @@ class Store:
         with open(temp, 'wb') as handle:
             with zstandard.ZstdCompressor(compression_params=params).stream_writer(handle, closefd=False) as writer:
                 for record in self.render(session):
-                    line = canonical(record) + b'\n'
+                    line = (record if isinstance(record, bytes) else canonical(record)) + b'\n'
                     raw += len(line)
                     writer.write(line)
         os.chmod(temp, 0o640)
