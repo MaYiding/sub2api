@@ -76,6 +76,7 @@ class Store:
         self.zc_blob = zstandard.ZstdCompressor(level=3)
         self.zd = zstandard.ZstdDecompressor()
         self.in_tx = False
+        self.garbage = True
 
     # -- transactions -------------------------------------------------------
     def begin(self):
@@ -233,6 +234,7 @@ class Store:
         sources = json.loads(self.db.execute('SELECT merged_from FROM sessions WHERE id=?', (dst,)).fetchone()[0]) + [src] + json.loads(merged_from)
         self.db.execute('UPDATE sessions SET node_seq=node_seq+?, first_ts=min(first_ts,?), last_ts=max(last_ts,?), dirty=1, merged_from=? WHERE id=?', (moved, first, last, json.dumps(sources), dst))
         self.db.execute("UPDATE sessions SET state='merged', merged_into=?, dirty=1 WHERE id=?", (dst, src))
+        self.garbage = True
 
     # -- output -------------------------------------------------------------
     def due(self, clock):
@@ -343,6 +345,7 @@ class Store:
             for table in ('nodes', 'contexts', 'turns', 'hints'):
                 self.db.execute('DELETE FROM %s WHERE session_id=?' % table, (session,))
             self.db.execute("UPDATE sessions SET state='sealed' WHERE id=?", (session,))
+            self.garbage = True
             self.commit()
             sealed += 1
         return sealed
@@ -351,7 +354,10 @@ class Store:
         self.begin()
         self.db.execute('DELETE FROM dropped WHERE ts<?', (clock-self.reopen_window-86400,))
         self.db.execute("DELETE FROM lineage WHERE session_id IN (SELECT id FROM sessions WHERE state='sealed' AND last_ts<?)", (clock-lineage_days*86400,))
-        self.db.execute('DELETE FROM blobs WHERE hash NOT IN (SELECT blob FROM nodes) AND hash NOT IN (SELECT blob FROM contexts)')
+        if self.garbage:
+            # Blobs only become unreferenced when sessions are sealed or merged.
+            self.db.execute('DELETE FROM blobs WHERE hash NOT IN (SELECT blob FROM nodes) AND hash NOT IN (SELECT blob FROM contexts)')
+            self.garbage = False
         self.commit()
 
     def catalog_rows(self, day):
@@ -360,8 +366,9 @@ class Store:
                                (start, start+86400)).fetchall()
 
     def stats(self):
+        # Cheap queries only: this runs every few seconds next to ingestion.
         counts = dict(self.db.execute('SELECT state, count(*) FROM sessions GROUP BY state').fetchall())
         counts['dirty'] = self.db.execute("SELECT count(*) FROM sessions WHERE state='active' AND dirty=1").fetchone()[0]
-        counts['nodes'] = self.db.execute('SELECT count(*) FROM nodes').fetchone()[0]
-        counts['blob_bytes'] = self.db.execute('SELECT coalesce(sum(length(data)),0) FROM blobs').fetchone()[0]
+        pages, size, free = (self.db.execute('PRAGMA ' + p).fetchone()[0] for p in ('page_count', 'page_size', 'freelist_count'))
+        counts['state_db_bytes'], counts['state_db_free_bytes'] = pages*size, free*size
         return counts

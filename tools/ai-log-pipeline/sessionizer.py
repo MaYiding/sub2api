@@ -161,17 +161,9 @@ class BackfillSource:
         self.stored, self.index = stored, 0
         LOG.info('backfill_packs total=%d', len(self.keys))
 
-    def poll(self):
-        if self.index >= len(self.keys):
-            return None
+    def _fetch(self, key):
         import io
         import pyarrow.parquet as pq
-        key = self.keys[self.index]
-        self.index += 1
-        # Keys are .../partition=P/<first>-<last>.parquet; skip packs already consumed.
-        match = re.search(r'/partition=(\d+)/\d+-(\d+)\.parquet$', key)
-        if match and int(match.group(2)) < self.stored.get((self.topic, int(match.group(1))), 0):
-            return []
         blob = self.client.get_object(Bucket=self.bucket, Key=key)['Body'].read()
         table = pq.read_table(io.BytesIO(blob))
         kinds, digests, bodies = (table.column(n).to_pylist() for n in ('record_type', 'digest', 'body'))
@@ -182,18 +174,37 @@ class BackfillSource:
                 continue
             event = json.loads(event_json)
             partition, offset = event.pop('clean_partition'), event.pop('clean_offset')
-            if offset < self.stored.get((self.topic, partition), 0):
-                continue
             event['data'] = b''.join(blocks[d] for d in refs)
             result.append((self.topic, partition, offset, event))
         result.sort(key=lambda r: (r[1], r[2]))
         return result
 
+    def _consumed(self, key):
+        # Keys are .../partition=P/<first>-<last>.parquet; skip packs already consumed.
+        match = re.search(r'/partition=(\d+)/\d+-(\d+)\.parquet$', key)
+        return bool(match) and int(match.group(2)) < self.stored.get((self.topic, int(match.group(1))), 0)
+
+    def poll(self):
+        # Download/decode a few packs ahead: S3 reads from the HDD archive are
+        # otherwise ~40% of backfill time.
+        from concurrent.futures import ThreadPoolExecutor
+        if not hasattr(self, 'pool'):
+            self.pool, self.ahead = ThreadPoolExecutor(max_workers=4), []
+        while len(self.ahead) < 8 and self.index < len(self.keys):
+            key = self.keys[self.index]
+            self.index += 1
+            if not self._consumed(key):
+                self.ahead.append(self.pool.submit(self._fetch, key))
+        if not self.ahead:
+            return None
+        return [r for r in self.ahead.pop(0).result() if r[2] >= self.stored.get((r[0], r[1]), 0)]
+
     def commit(self, marks):
         self.stored.update(marks)
 
     def close(self):
-        pass
+        if hasattr(self, 'pool'):
+            self.pool.shutdown(wait=False, cancel_futures=True)
 
 
 def write_catalog(store, root, days):
@@ -334,6 +345,8 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    import faulthandler
+    faulthandler.register(signal.SIGUSR1, all_threads=False)  # `kill -USR1` prints the current stack to the journal.
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
