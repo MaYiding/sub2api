@@ -74,6 +74,7 @@ class TurnTests(unittest.TestCase):
         expired = anthropic(msgs, assistant('a'))
         expired['end'] = None
         self.assertEqual(classify(expired)[1], 'no_end')
+        self.assertEqual(classify(anthropic(msgs, assistant('a'), wal_dropped_events=2))[1], 'capture_gap')
 
 
 class StoreTests(unittest.TestCase):

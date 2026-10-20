@@ -82,3 +82,26 @@ func TestAILogCaptureMarksUnreadRequestBody(t *testing.T) {
 		t.Fatal("unread body reported complete")
 	}
 }
+
+func TestAILogCapturePrefersClaudeCodeSession(t *testing.T) {
+	s := &aiLogTestSink{}
+	router := gin.New()
+	router.Use(aiLogCapture(s, "test"))
+	router.POST("/v1/messages", func(c *gin.Context) { c.Status(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	req.Header.Set("X-Session-ID", "other")
+	req.Header.Set("X-Claude-Code-Session-Id", "0f8e6a52-5c1d-4a43-9d7e-1b2c3d4e5f60")
+	req.Header.Set("X-Claude-Code-Agent-Id", "agent-2")
+	req.Header.Set("X-Claude-Code-Parent-Agent-Id", "agent-1")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+	start := s.events[0]
+	if start.TraceID != "0f8e6a52-5c1d-4a43-9d7e-1b2c3d4e5f60" || start.Metadata["x-claude-code-session-id"] != start.TraceID {
+		t.Fatal("Claude Code session not used as trace")
+	}
+	if start.Metadata["x-claude-code-agent-id"] != "agent-2" || start.Metadata["x-claude-code-parent-agent-id"] != "agent-1" || start.Metadata["x-session-id"] != "other" {
+		t.Fatal("agent correlation lost")
+	}
+	if start.Metadata["upstream_bodies"] != false {
+		t.Fatal("upstream body mode not recorded")
+	}
+}

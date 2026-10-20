@@ -14,6 +14,8 @@ AI_LOG_ENABLED=true
 AI_LOG_SOURCE_ID=sub2api-production
 AI_LOG_SPOOL_DIR=/app/ai-log-spool
 AI_LOG_SPOOL_MAX_BYTES=21474836480
+# Optional, default false: copy upstream attempt bodies too.
+AI_LOG_UPSTREAM_BODIES=false
 ```
 
 The spool is separate from the application database. Files/directories are
@@ -61,13 +63,21 @@ refuses to change source/topic/spool in place and never clears existing WAL.
 - HTTP gateway request bytes, delivered HTTP/SSE response bytes, and each
   upstream HTTP attempt (including retries) are recorded. SSE flush, request
   cancellation and upstream body limits retain their original behavior.
+- Upstream attempts record method, host, status, content type and, in
+  `upstream.request.end` / `upstream.response.end`, the body `bytes`, `sha256`
+  and `body_complete`. The bodies themselves are copied only with
+  `AI_LOG_UPSTREAM_BODIES=true`; `capture.start` records the mode as
+  `upstream_bodies`. They largely repeat the client-facing request and
+  response and were about half of all captured bytes, so leaving them off
+  halves WAN, Kafka and spool load.
 - Responses WebSocket, Grok Realtime and Live sideband application frames are
   captured at the decoded frame boundary, preserving binary data and framing.
 - Large messages are split into 64 KiB parts. `capture_id`, `message_id`, `part`,
   `parts`, `sequence` and stable `event_id` support reconstruction and duplicate
   detection. Tool calls and tool results remain in the actual message bodies.
-- `X-Agent-Run-ID` / `X-Trace-ID` are preferred for run correlation. Native
-  `thread-id`, session and subagent headers are retained when present. A relay
+- Claude Code's `X-Claude-Code-Session-Id` is preferred as the trace ID, then
+  `X-Agent-Run-ID` / `X-Trace-ID`. Native `thread-id`, session, subagent and
+  Claude Code agent/parent-agent headers are retained when present. A relay
   cannot reconstruct local tool execution, subagent hierarchy or reasoning
   that the client never transmitted; an Agent SDK should supply explicit run
   and parent-span identifiers for those events.
@@ -75,7 +85,11 @@ refuses to change source/topic/spool in place and never clears existing WAL.
   copied. Content inside user/tool messages is retained and must be treated as
   private data; this is not a universal secret detector.
 - `capture.end` distinguishes incomplete reads, cancellation, write errors and
-  enqueue loss. Absence of this marker means an unfinished/interrupted capture.
+  loss. `dropped_events` counts events refused by the memory queue;
+  `wal_dropped_events` (present only when nonzero) counts events of this
+  capture that the WAL writer accepted but could not persist, for example
+  because the spool was full. Absence of this marker means an
+  unfinished/interrupted capture.
 
 ## Delivery and failure behavior
 

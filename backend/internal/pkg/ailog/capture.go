@@ -31,12 +31,16 @@ type Event struct {
 
 type Sink interface{ Submit(Event) bool }
 
+// bodySink is implemented by sinks that are configured to copy upstream bodies.
+type bodySink interface{ UpstreamBodies() bool }
+
 type Capture struct {
 	mu                sync.Mutex
 	sink              Sink
 	source, id, trace string
 	seq, dropped      uint64
 	finished          bool
+	upstreamBodies    bool
 }
 
 type contextKey struct{}
@@ -50,6 +54,13 @@ func New(sink Sink, source, trace string, metadata map[string]any) *Capture {
 		trace = id
 	}
 	c := &Capture{sink: sink, source: source, id: id, trace: trace}
+	if s, ok := sink.(bodySink); ok {
+		c.upstreamBodies = s.UpstreamBodies()
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["upstream_bodies"] = c.upstreamBodies
 	c.emit("capture.start", "", 0, 0, nil, metadata)
 	return c
 }

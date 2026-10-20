@@ -261,7 +261,7 @@ def classify(capture):
         return None, 'http_%s' % end.get('status'), hint
     if end.get('client_canceled') or not end.get('request_body_complete', True) or end.get('response_write_failed'):
         return None, 'aborted', hint
-    if end.get('dropped_events') or capture.get('sequence_gap'):
+    if end.get('dropped_events') or end.get('wal_dropped_events') or capture.get('sequence_gap'):
         return None, 'capture_gap', hint
     if not isinstance(body, dict):
         return None, 'request_unparsed', hint
