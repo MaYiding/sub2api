@@ -54,6 +54,10 @@ Caddyfile, and leaves the old container stopped rather than deleting it.
 
 The next rollout alternates ports: blue uses `8080`, green uses `18081`.
 Only one deployment can run at a time because the script takes a host lock.
+Running the script again with the image that is already active exits without
+changes, so a repeated rollout never cycles slots or needs the stopped rollback
+container removed. Set `SUB2API_REDEPLOY_SAME_IMAGE=true` to redeploy the same
+image with changed settings.
 After the first rollout, do not run `docker compose up -d sub2api` for the
 application service: Compose may resurrect the stopped legacy container on
 port `8080`. Use this script for application image updates; Compose can still

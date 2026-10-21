@@ -20,6 +20,7 @@ LEGACY_CONTAINER="${SUB2API_LEGACY_CONTAINER:-sub2api}"
 STARTUP_TIMEOUT_SECONDS="${SUB2API_STARTUP_TIMEOUT_SECONDS:-180}"
 MONITOR_SECONDS="${SUB2API_MONITOR_SECONDS:-30}"
 DRAIN_SECONDS="${SUB2API_DRAIN_SECONDS:-60}"
+REDEPLOY_SAME_IMAGE="${SUB2API_REDEPLOY_SAME_IMAGE:-false}"
 
 TARGET_IMAGE=""
 TARGET_SLOT=""
@@ -62,9 +63,12 @@ Useful overrides:
   SUB2API_STARTUP_TIMEOUT_SECONDS  default: 180
   SUB2API_MONITOR_SECONDS    default: 30
   SUB2API_DRAIN_SECONDS      default: 60
+  SUB2API_REDEPLOY_SAME_IMAGE  default: false; true redeploys an image that
+                             is already active (to apply changed settings)
 
 The image must already exist locally and be linux/amd64. The script never
 builds, pulls, or stops the active container before the candidate is healthy.
+Running it again with the image that is already active changes nothing.
 EOF
 }
 
@@ -109,6 +113,14 @@ load_active_slot() {
   [[ "$(docker_inspect_value "$ACTIVE_CONTAINER" '{{.State.Status}}')" == running ]] || die "active container is not running: $ACTIVE_CONTAINER"
 }
 
+# Compare image IDs, not names: a retagged rebuild is a different image.
+active_runs_target_image() {
+  local active_image target_image
+  active_image="$(docker_inspect_value "$ACTIVE_CONTAINER" '{{.Image}}')"
+  target_image="$(docker image inspect "$TARGET_IMAGE" --format '{{.Id}}')"
+  [[ -n "$active_image" && "$active_image" == "$target_image" ]]
+}
+
 select_target_slot() {
   case "$ACTIVE_SLOT" in
     blue)
@@ -139,6 +151,7 @@ validate_inputs() {
   require_integer SUB2API_BLUE_PORT "$BLUE_PORT"
   require_integer SUB2API_GREEN_PORT "$GREEN_PORT"
   [[ "$BLUE_PORT" != "$GREEN_PORT" ]] || die "blue and green ports must differ"
+  [[ "$REDEPLOY_SAME_IMAGE" == true || "$REDEPLOY_SAME_IMAGE" == false ]] || die "SUB2API_REDEPLOY_SAME_IMAGE must be true or false"
 
   docker image inspect "$TARGET_IMAGE" >/dev/null 2>&1 || die "image is not loaded locally: $TARGET_IMAGE"
   local platform
@@ -368,6 +381,12 @@ main() {
   flock -n 9 || die "another blue-green deployment is already running"
   validate_inputs
   load_active_slot
+  # A repeated run must not cycle slots: that would require deleting the
+  # stopped rollback container and gains nothing.
+  if [[ "$REDEPLOY_SAME_IMAGE" != true ]] && active_runs_target_image; then
+    log "active container $ACTIVE_CONTAINER already runs $TARGET_IMAGE; nothing to do (SUB2API_REDEPLOY_SAME_IMAGE=true redeploys it)"
+    return 0
+  fi
   select_target_slot
   load_network_and_data
   stage_data
