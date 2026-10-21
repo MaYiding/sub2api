@@ -75,7 +75,8 @@ func aiLogCapture(sink ailog.Sink, source string) gin.HandlerFunc {
 			body = &aiLogBody{ReadCloser: c.Request.Body, stream: requestStream}
 			c.Request.Body = body
 		}
-		writer := &aiLogWriter{ResponseWriter: c.Writer, stream: ailog.NewStream(capture, "http.response.body")}
+		original := c.Writer
+		writer := &aiLogWriter{ResponseWriter: original, stream: ailog.NewStream(capture, "http.response.body")}
 		c.Writer = writer
 		completed := false
 		defer func() {
@@ -89,6 +90,10 @@ func aiLogCapture(sink ailog.Sink, source string) gin.HandlerFunc {
 				"handler_completed":     completed,
 				"client_canceled":       c.Request.Context().Err() != nil,
 			})
+			// Hand back the incoming writer. An outer wrapper (the ops error
+			// logger) restores and releases its pooled writer only if it sees its
+			// own, and the access log reads Status() after that release.
+			c.Writer = original
 		}()
 		c.Next()
 		completed = true

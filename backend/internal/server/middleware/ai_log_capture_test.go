@@ -105,3 +105,52 @@ func TestAILogCapturePrefersClaudeCodeSession(t *testing.T) {
 		t.Fatal("upstream body mode not recorded")
 	}
 }
+
+// aiLogPooledWriter stands in for the ops error logger's pooled capture
+// writer: once released it no longer reaches the real writer.
+type aiLogPooledWriter struct {
+	gin.ResponseWriter
+	released bool
+}
+
+func (w *aiLogPooledWriter) Status() int {
+	if w.released {
+		return 0
+	}
+	return w.ResponseWriter.Status()
+}
+
+func TestAILogCaptureRestoresWriterForOuterMiddleware(t *testing.T) {
+	for _, want := range []int{http.StatusOK, http.StatusForbidden} {
+		s := &aiLogTestSink{}
+		seen := -1
+		router := gin.New()
+		// Outermost: reads the status after the chain, like the access log.
+		router.Use(func(c *gin.Context) {
+			c.Next()
+			seen = c.Writer.Status()
+		})
+		// Restores only its own writer, then releases it, like the ops error logger.
+		router.Use(func(c *gin.Context) {
+			original := c.Writer
+			pooled := &aiLogPooledWriter{ResponseWriter: original}
+			defer func() {
+				if c.Writer == pooled {
+					c.Writer = original
+				}
+				pooled.released = true
+			}()
+			c.Writer = pooled
+			c.Next()
+		})
+		router.Use(aiLogCapture(s, "test"))
+		router.POST("/v1/messages", func(c *gin.Context) { c.String(want, "done") })
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}")))
+		if seen != want {
+			t.Fatalf("outer middleware saw status %d, want %d", seen, want)
+		}
+		if end := s.events[len(s.events)-1]; end.Metadata["status"] != want {
+			t.Fatalf("captured status %v, want %d", end.Metadata["status"], want)
+		}
+	}
+}
