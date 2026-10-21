@@ -95,3 +95,27 @@ if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_UPSTREAM_BODIES=true'; the
 fi
 unset AI_LOG_UPSTREAM_BODIES
 echo 'blue-green shared AI log spool test passed'
+
+# A repeated run with the active image is a no-op; any other image deploys.
+docker_inspect_value() {
+  case "$2" in
+    *.Image*) printf '%s\n' "$mock_active_image" ;;
+  esac
+}
+docker() {
+  [[ "$1 $2" == "image inspect" ]] && printf '%s\n' sha256:target
+}
+ACTIVE_CONTAINER=sub2api-green
+TARGET_IMAGE=sub2api:test
+mock_active_image=sha256:target
+active_runs_target_image
+mock_active_image=sha256:older
+if active_runs_target_image; then
+  echo 'a different image must be deployed' >&2; exit 1
+fi
+mock_active_image=
+if active_runs_target_image; then
+  echo 'an unknown active image must be deployed' >&2; exit 1
+fi
+unset -f docker
+echo 'blue-green repeated run test passed'
