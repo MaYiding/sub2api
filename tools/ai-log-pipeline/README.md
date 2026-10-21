@@ -141,18 +141,23 @@ conversation:
    reason (`http_502`, `aborted`, `response_incomplete`, `route:...`) and not
    stored. Upstream copies of the same bodies are counted, not stored.
 2. `turns.py` hashes each input/output item in the shape clients echo it back
-   (`cache_control`, empty/null fields, response-only `status`/`metadata` are
-   ignored; string content equals a single text block). Node id =
-   `H(parent id, item hash)`, as in vLLM's prefix-cache block hashes.
+   (`cache_control`, empty/null fields, response-only `status`/`metadata` and
+   chat `reasoning`/`reasoning_content` are ignored but stored; string content
+   equals a single text block). Node id = `H(parent id, item hash)`, as in
+   vLLM's prefix-cache block hashes. Streamed chat reasoning is kept under the
+   key the server streamed (`delta.reasoning` or `delta.reasoning_content`).
 3. `sessions.py` inserts every turn's input+output path into a tree. A request
    whose content is a prefix of a later request adds no nodes; forks, retries
    and regenerations become branches; subagents and compaction restarts
    become extra roots of the same session.
 4. A turn joins a session through the deepest shared model-generated node of
-   at least 128 bytes (fork/resume lineage, scoped to source and user), else
-   through the client session id (`metadata.user_id.session_id` from Claude
-   Code, `session-id`/`thread-id` from Codex, `prompt_cache_key`). Shared
-   prompts alone (CLAUDE.md, tool lists) never join conversations. Sessions
+   at least 128 bytes in echo form (fork/resume lineage, scoped to source and
+   user), else through the client session id (`metadata.user_id.session_id`
+   from Claude Code, `session-id`/`thread-id` from Codex, `prompt_cache_key`).
+   The shared node must have been echoed back: this turn sends it as input, or
+   it arrived as input earlier and its producing turn is still missing.
+   Identical outputs alone (deterministic classifiers, temperature 0) never
+   join requests, nor do shared prompts (CLAUDE.md, tool lists). Sessions
    without any client id are marked `inferred`.
 5. A session is written when it has been idle for `idle_flush_seconds` (30 min)
    and rewritten in place if it continues within `reopen_window_seconds`
@@ -164,14 +169,23 @@ and a per-day catalog `_catalog/dt=<day>.parquet`. Lines, in order:
 
 | type | content |
 |-|-|
-| `session` | ids, time range, `client_session_ids`, `inferred`, `resumed_from`, `merged_from`, counts, `leaves`, `branch_points`, models, dropped requests by reason |
+| `session` | ids, `node_hash` (echo rules behind node ids; absent = 1), time range, `client_session_ids`, `inferred`, `resumed_from`, `merged_from`, counts, `leaves`, `branch_points`, models, dropped requests by reason |
 | `context` | system/instructions/tools, deduplicated by hash |
 | `node` | `id`, `parent`, `origin` (input/output), producing `turn`, original `item` |
 | `turn` | per request: capture id, times, models, usage (without the per-item `attribution` breakdown), stop reason, params, `context`, `input_leaf`, `output_leaf` |
 
 `python session_tool.py verify FILE...` recomputes every node id from the
-stored items; `python session_tool.py export FILE [--all]` prints one linear
-conversation per leaf (or per turn).
+stored items (`legacy_nodes` counts ids written under `node_hash` 1, which
+sessions open across that upgrade keep); `python session_tool.py export FILE
+[--all]` prints one linear conversation per leaf (or per turn, each with its
+own `capture_id`; `capture_ids` lists every turn that ended at the leaf).
+
+`node_hash` 2 (chat reasoning no longer hashed) changes node ids only for chat
+items that carry reasoning. Sessions active at the upgrade keep their earlier
+nodes. A client that echoes role+content only continues them as before; one
+that echoes reasoning back no longer matches the old ids, so it continues on a
+new branch when it sends a client session id and in a new session otherwise.
+Sealed sessions and their files are unaffected.
 
 State lives in SQLite (WAL, `synchronous=FULL`) on SSD together with the
 consumed offsets, so a restart resumes exactly; files are rewritten from that

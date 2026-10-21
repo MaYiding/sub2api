@@ -3,8 +3,8 @@
 Each session is a tree of unique items (ChatGPT-export/oasst style
 id/parent nodes). A turn inserts its input+output path; a request whose
 content is a prefix of a later request therefore adds no new nodes. Turns join
-a session through the deepest shared model-generated node (fork/resume
-lineage) or, failing that, the client's declared session id.
+a session through the deepest shared model-generated node that one side echoed
+back (fork/resume lineage) or, failing that, the client's declared session id.
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -17,7 +17,7 @@ import uuid
 
 import zstandard
 
-from turns import LINEAGE_MIN_BYTES, canonical, is_generated, node_path
+from turns import LINEAGE_MIN_BYTES, NODE_HASH, canonical, chain, is_generated, item_echo
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS offsets(topic TEXT, partition INTEGER, next_offset INTEGER, PRIMARY KEY(topic, partition));
@@ -137,16 +137,26 @@ class Store:
             session_id = row[1]
         return None, None
 
-    def _lineage(self, source, user, path, generated):
+    def _lineage(self, source, user, path, generated, n_in):
+        """Resolved session and depth of the deepest generated node shared with this turn.
+
+        A shared node shows continuation only if a client echoed it: this turn
+        sends it as input, or a request that arrived earlier did and its session
+        still waits for the turn that produced it. Two turns that only produced
+        the same output (a deterministic model, temperature 0) do not link.
+        """
         candidates = [path[i] for i in range(len(path)) if generated[i]]
         found = {}
         for part in chunks(candidates):
             sql = 'SELECT node_id, session_id FROM lineage WHERE source_id=? AND user_id IS ? AND node_id IN (%s)' % ','.join('?'*len(part))
             found.update(self.db.execute(sql, (source, user, *part)).fetchall())
         for i in range(len(path)-1, -1, -1):
-            if path[i] in found:
-                return found[path[i]], i
-        return None, -1
+            if path[i] not in found:
+                continue
+            session, state = self.resolve(found[path[i]])
+            if i < n_in or self.db.execute('SELECT 1 FROM nodes WHERE session_id=? AND node_id=? AND turn IS NULL', (session, path[i])).fetchone():
+                return session, state, i
+        return None, None, -1
 
     def ingest(self, turn, size):
         """Insert one complete turn; returns the session id. Idempotent per capture."""
@@ -157,13 +167,14 @@ class Store:
         items = turn['items'] + turn['output']
         n_in = len(turn['items'])
         raws = [canonical(x) for x in items]
-        path = node_path(api, items, raws)
-        generated = [(i >= n_in or is_generated(x)) and len(raws[i]) >= LINEAGE_MIN_BYTES for i, x in enumerate(items)]
+        echoes = [item_echo(api, x, raw) for x, raw in zip(items, raws)]
+        path = chain(digest for digest, _size in echoes)
+        # Size of what is hashed: stripped fields and chat reasoning cannot make a node distinctive.
+        generated = [(i >= n_in or is_generated(x)) and echoes[i][1] >= LINEAGE_MIN_BYTES for i, x in enumerate(items)]
         ts_start, ts_end = instant(turn['t_start']), instant(turn['t_end'])
 
         # Outputs count too: a later request may have echoed them before this turn arrived.
-        session, depth = self._lineage(source, user, path, generated)
-        session, state = self.resolve(session)
+        session, state, depth = self._lineage(source, user, path, generated, n_in)
         resumed_from = None
         if state == 'sealed':
             session, resumed_from = None, session
@@ -264,7 +275,7 @@ class Store:
         for hint in hints:
             for reason, count in self.db.execute('SELECT reason, count(*) FROM dropped WHERE source_id=? AND user_id IS ? AND hint=? GROUP BY reason', (source, user, hint)):
                 dropped[reason] = dropped.get(reason, 0) + count
-        header = {'type': 'session', 'schema': FILE_SCHEMA, 'session_id': session, 'version': version+1, 'source_id': source, 'user_id': user,
+        header = {'type': 'session', 'schema': FILE_SCHEMA, 'node_hash': NODE_HASH, 'session_id': session, 'version': version+1, 'source_id': source, 'user_id': user,
                   'first_time': datetime.fromtimestamp(first, timezone.utc).isoformat(), 'last_time': datetime.fromtimestamp(last, timezone.utc).isoformat(),
                   'client_session_ids': hints, 'inferred': bool(inferred), 'resumed_from': resumed_from, 'merged_from': json.loads(merged_from),
                   'turns': len(turns), 'nodes': len(nodes), 'roots': children.get(None, 0), 'leaves': leaves,

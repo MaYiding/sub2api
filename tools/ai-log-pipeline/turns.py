@@ -12,13 +12,19 @@ API_BY_ROUTE = {'/v1/responses': 'responses', '/responses': 'responses', '/v1/me
                 '/v1/chat/completions': 'chat', '/chat/completions': 'chat'}
 # Response-only fields that clients drop when echoing output items back.
 RESPONSE_ONLY = {'status', 'metadata', 'internal_chat_message_metadata_passthrough'}
+# Chat completions return the model's thinking next to the answer; most clients
+# echo only role+content. Kept in the stored item, left out of the hash.
+CHAT_REASONING = ('reasoning', 'reasoning_content')
+# Version of the echo rules behind node ids, written to file headers. 1 (or no
+# header field): chat reasoning was hashed. 2: it is ignored.
+NODE_HASH = 2
 CONTEXT_KEYS = {'responses': ('instructions', 'tools', 'tool_choice', 'text', 'reasoning', 'include', 'parallel_tool_calls'),
                 'messages': ('system', 'tools', 'tool_choice', 'thinking', 'output_config'),
                 'chat': ('tools', 'tool_choice', 'response_format', 'reasoning_effort')}
 GENERATED_TYPES = {'reasoning', 'function_call', 'custom_tool_call', 'web_search_call', 'local_shell_call',
                    'file_search_call', 'computer_call', 'image_generation_call', 'code_interpreter_call', 'mcp_call'}
-# Model output shorter than this may repeat by chance ("OK"), so it never
-# links two conversations on its own.
+# Model output whose echo form is shorter than this may repeat by chance
+# ("OK"), so it never links two conversations on its own.
 LINEAGE_MIN_BYTES = 128
 SESSION_HEADERS = ('x-claude-code-session-id', 'session-id', 'thread-id', 'x-session-id', 'session_id', 'x-agent-run-id', 'x-trace-id')
 
@@ -35,13 +41,15 @@ def _strip(value):
     return value
 
 
-def echo_form(api, item):
+def echo_form(api, item, node_hash=NODE_HASH):
     """Normalize an item to the shape clients send back in later requests."""
     if not isinstance(item, dict):
         return item
     item = _strip(item)
     if api == 'responses':
         item = {k: v for k, v in item.items() if k not in RESPONSE_ONLY}
+    elif api == 'chat' and node_hash >= 2:
+        item = {k: v for k, v in item.items() if k not in CHAT_REASONING}
     if isinstance(item.get('content'), str) and 'role' in item:
         item['content'] = [{'type': 'text', 'text': item['content']}]
     return item
@@ -50,18 +58,26 @@ def echo_form(api, item):
 _ECHO_CACHE = {}
 
 
-def item_hash(api, item, raw=None):
-    """Hash of the echo form. With the item's canonical bytes, repeats are cached:
-    every turn resends the whole history, so almost all items were seen before."""
+def item_echo(api, item, raw=None):
+    """(hash, size) of the echo form. With the item's canonical bytes, repeats are
+    cached: every turn resends the whole history, so almost all items were seen before."""
     if raw is None:
-        return hashlib.sha256(canonical(echo_form(api, item))).digest()
+        form = canonical(echo_form(api, item))
+        return hashlib.sha256(form).digest(), len(form)
     key = hashlib.sha256(api.encode() + raw).digest()
-    digest = _ECHO_CACHE.get(key)
-    if digest is None:
+    value = _ECHO_CACHE.get(key)
+    if value is None:
         if len(_ECHO_CACHE) > 500000:
             _ECHO_CACHE.clear()
-        digest = _ECHO_CACHE[key] = hashlib.sha256(canonical(echo_form(api, item))).digest()
-    return digest
+        form = canonical(echo_form(api, item))
+        value = _ECHO_CACHE[key] = (hashlib.sha256(form).digest(), len(form))
+    return value
+
+
+def item_hash(api, item, raw=None, node_hash=NODE_HASH):
+    if node_hash != NODE_HASH:
+        return hashlib.sha256(canonical(echo_form(api, item, node_hash))).digest()
+    return item_echo(api, item, raw)[0]
 
 
 def is_generated(item):
@@ -70,13 +86,21 @@ def is_generated(item):
     return item.get('role') == 'assistant' or item.get('type') in GENERATED_TYPES
 
 
-def node_path(api, items, raws=None):
-    """Chain ids: a node id commits to its item and every ancestor."""
-    parent, path = b'', []
-    for i, item in enumerate(items):
-        parent = hashlib.sha256(parent + item_hash(api, item, raws[i] if raws else None)).digest()[:16]
+def node_id(parent, digest):
+    """A node id commits to its item and, through the parent id, every ancestor."""
+    return hashlib.sha256((parent or b'') + digest).digest()[:16]
+
+
+def chain(digests):
+    parent, path = None, []
+    for digest in digests:
+        parent = node_id(parent, digest)
         path.append(parent)
     return path
+
+
+def node_path(api, items, raws=None, node_hash=NODE_HASH):
+    return chain(item_hash(api, item, raws[i] if raws else None, node_hash) for i, item in enumerate(items))
 
 
 def sse(raw):
@@ -141,7 +165,7 @@ def _messages_stream(raw):
 
 
 def _chat_stream(raw):
-    tools, text, reasoning = {}, [], []
+    tools, text, reasoning = {}, [], {}
     finish = usage = model = response_id = None
     done = False
     for _event, data in sse(raw):
@@ -159,8 +183,11 @@ def _chat_stream(raw):
             delta = choice.get('delta') or {}
             if delta.get('content'):
                 text.append(delta['content'])
-            if delta.get('reasoning_content'):
-                reasoning.append(delta['reasoning_content'])
+            # vLLM streams `reasoning`, DeepSeek-style servers `reasoning_content`;
+            # keep the key the same server's non-stream message would carry.
+            for key in CHAT_REASONING:
+                if isinstance(delta.get(key), str) and delta[key]:
+                    reasoning.setdefault(key, []).append(delta[key])
             for call in delta.get('tool_calls') or []:
                 slot = tools.setdefault(call.get('index', 0), {'type': 'function', 'function': {'name': '', 'arguments': ''}})
                 if call.get('id'):
@@ -172,8 +199,8 @@ def _chat_stream(raw):
     if not done or finish is None:
         return None
     message = {'role': 'assistant', 'content': ''.join(text) if text else None}
-    if reasoning:
-        message['reasoning_content'] = ''.join(reasoning)
+    for key, parts in reasoning.items():
+        message[key] = ''.join(parts)
     if tools:
         message['tool_calls'] = [tools[i] for i in sorted(tools)]
     return {'output': [message], 'usage': usage, 'model': model, 'stop': finish, 'response_id': response_id}
