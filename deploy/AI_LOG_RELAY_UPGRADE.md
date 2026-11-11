@@ -95,7 +95,7 @@ docker run --rm --entrypoint /app/sub2api sub2api:0.2.15-ailog.20261021 --versio
 注意事项：
 
 - 现有 g2 shipper 配置 `/etc/sub2api-ai-log/shipper.json`（权限 0600）不动。它含 Kafka 凭据，不要查看、复制或外发。
-- `AI_LOG_ENABLED`、`AI_LOG_SOURCE_ID`、`AI_LOG_SPOOL_MAX_BYTES`、`AI_LOG_UPSTREAM_BODIES` 和 `/app/ai-log-spool` 挂载，由脚本从当前运行的容器继承。
+- `AI_LOG_ENABLED`、`AI_LOG_SOURCE_ID`、`AI_LOG_SPOOL_MAX_BYTES`、`AI_LOG_UPSTREAM_BODIES`、`AI_LOG_INCLUDE_API_KEYS` 和 `/app/ai-log-spool` 挂载，由脚本从当前运行的容器继承。
 - 不要重跑 `install-ai-log-shipper.sh`，不要改 shipper 配置，不要清空或移动 spool 目录。积压的数据要保留，shipper 会继续发送。
 - 切换期间新旧容器会短暂同时写同一个 spool，这是设计行为。
 
@@ -197,6 +197,7 @@ AI_LOG_ENABLED=false SUB2API_REDEPLOY_SAME_IMAGE=true ./blue-green-deploy.sh <�
 | 变量 | 默认值 | 建议 |
 |---|---|---|
 | `AI_LOG_UPSTREAM_BODIES` | `false` | 保持默认。只有系统管理员要求时才设为 `true`。只接受 `true`/`false`，其他值脚本直接拒绝。 |
+| `AI_LOG_INCLUDE_API_KEYS` | `false` | 仅内网查询场景设为 `true`，把认证用的完整 Sub2API Key 写入 Kafka/ClickHouse/归档；只接受 `true`/`false`。 |
 | `AI_LOG_SPOOL_MAX_BYTES` | `21474836480`（20 GiB） | 调到至少能扛住一天的 WAN/Kafka 中断。 |
 | `SUB2API_REDEPLOY_SAME_IMAGE` | `false` | 只在用当前镜像重新发布、以改变上面两个设置时才设为 `true`。只对这一次执行生效，不写进容器。 |
 

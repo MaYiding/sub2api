@@ -99,6 +99,26 @@ complete. An absent end marker or recorded drops means an incomplete capture.
 `GET /v1/archive/{archive_key}` downloads a checksummed pack for operator export.
 All data routes require a bearer token; `/healthz` returns only process health.
 
+When the Sub2API source sets `AI_LOG_INCLUDE_API_KEYS=true`, the restricted
+internal deployment puts the authenticated `api_key` in `capture.start`
+metadata. That value therefore exists in Kafka clean events, ClickHouse, and
+raw archive packs. Treat those stores and the query bearer token as
+credential-bearing assets; do not expose the query API outside the internal
+network. The metadata also includes `api_key_id`, `api_key_name`,
+`api_key_prefix`, `api_key_last4`, and `api_key_fingerprint`. The switch is
+false by default.
+
+For recent requests, use `GET /v1/requests/latest`. Filter with `api_key_id`,
+`api_key_name`, `api_key_prefix`, `api_key_last4`, or
+`api_key_fingerprint`. To match an exact key, send it in the
+`X-Sub2API-Key` header; the key is never placed in the URL. The response
+contains the capture ID and the captured key metadata, and the capture endpoint
+can then replay the complete request. `GET /v1/api-keys/stats` returns recent
+distinct capture counts grouped by key. Both endpoints accept `window_seconds`,
+`limit`, and `source_id` filters. Captures created before plaintext-key capture
+was enabled have no `api_key` field and must be selected with their recorded
+`api_key_id` or trace.
+
 If the ClickHouse catalog is lost, apply `schema.sql` and run:
 
 ```sh

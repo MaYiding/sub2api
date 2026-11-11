@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,12 +39,7 @@ func aiLogCapture(sink ailog.Sink, source string) gin.HandlerFunc {
 			metadata["protocol"] = "websocket"
 		}
 		if key, ok := GetAPIKeyFromContext(c); ok && key != nil {
-			metadata["api_key_id"] = key.ID
-			metadata["user_id"] = key.UserID
-			if key.Group != nil {
-				metadata["group_id"] = key.Group.ID
-				metadata["platform"] = key.Group.Platform
-			}
+			addAIAPIKeyMetadata(metadata, key, includeAIAPIKey(sink))
 		}
 		// Do not copy arbitrary headers, URL query strings, Authorization or
 		// cookies. Correlation values are bounded opaque identifiers. Claude
@@ -98,6 +96,53 @@ func aiLogCapture(sink ailog.Sink, source string) gin.HandlerFunc {
 		c.Next()
 		completed = true
 	}
+}
+
+// addAIAPIKeyMetadata records authenticated key identifiers. The full
+// credential is added only when the sink explicitly opts in through
+// AI_LOG_INCLUDE_API_KEYS. That opt-in is intended for the restricted
+// internal deployment; callers must protect Kafka, ClickHouse and archive
+// access as credential-bearing data stores.
+func includeAIAPIKey(sink ailog.Sink) bool {
+	provider, ok := sink.(interface{ IncludeAPIKeys() bool })
+	return ok && provider.IncludeAPIKeys()
+}
+
+func addAIAPIKeyMetadata(metadata map[string]any, key *service.APIKey, includeKey bool) {
+	if metadata == nil || key == nil {
+		return
+	}
+	metadata["api_key_id"] = key.ID
+	metadata["user_id"] = key.UserID
+	if key.Name != "" {
+		metadata["api_key_name"] = key.Name
+	}
+	if key.Key != "" && includeKey {
+		metadata["api_key_capture"] = true
+		metadata["api_key"] = key.Key
+		metadata["api_key_prefix"] = aiAPIKeyPrefix(key.Key, 8)
+		metadata["api_key_last4"] = aiAPIKeySuffix(key.Key, 4)
+		digest := sha256.Sum256([]byte(key.Key))
+		metadata["api_key_fingerprint"] = hex.EncodeToString(digest[:])
+	}
+	if key.Group != nil {
+		metadata["group_id"] = key.Group.ID
+		metadata["platform"] = key.Group.Platform
+	}
+}
+
+func aiAPIKeyPrefix(value string, length int) string {
+	if length <= 0 || len(value) <= length {
+		return value
+	}
+	return value[:length]
+}
+
+func aiAPIKeySuffix(value string, length int) string {
+	if length <= 0 || len(value) <= length {
+		return value
+	}
+	return value[len(value)-length:]
 }
 
 func aiLogCorrelation(value string) string {

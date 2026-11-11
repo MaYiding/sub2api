@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,48 @@ class QueryIsolationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertNotIn(source, query.call_args.args[0])
             self.assertEqual(query.call_args.args[1]['source'], source)
+
+    def test_latest_requests_accept_full_key_only_in_header(self):
+        full_key = 'sk-internal-test-key-1234567890'
+        with patch.object(self.api, 'query', return_value=[]) as query:
+            response = self.client.get('/v1/requests/latest', headers={**self.headers, 'X-Sub2API-Key': full_key})
+            self.assertEqual(response.status_code, 200)
+            sql, parameters = query.call_args.args
+            self.assertIn('e.api_key = {api_key:String}', sql)
+            self.assertEqual(parameters['api_key'], full_key)
+            self.assertNotIn(full_key, sql)
+
+    def test_latest_requests_support_legacy_api_key_id(self):
+        with patch.object(self.api, 'query', return_value=[]) as query:
+            response = self.client.get('/v1/requests/latest', params={'api_key_id': 7}, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            sql, parameters = query.call_args.args
+            self.assertIn('e.api_key_id = {api_key_id:Int64}', sql)
+            self.assertEqual(parameters['api_key_id'], 7)
+
+    def test_api_key_stats_uses_distinct_capture_ids(self):
+        with patch.object(self.api, 'query', return_value=[]) as query:
+            response = self.client.get('/v1/api-keys/stats', params={'window_seconds': 3600}, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            sql, parameters = query.call_args.args
+            self.assertIn('uniqExact(e.capture_id) AS request_count', sql)
+            self.assertEqual(parameters['limit'], 100)
+
+    def test_capture_exposes_captured_api_key_projection(self):
+        capture = str(uuid.uuid4())
+        events = [{'tenant_id': 'default', 'source_id': 'source-a', 'capture_id': capture,
+                   'event_id': str(uuid.uuid4()), 'sequence': 0, 'kind': 'capture.start',
+                   'metadata': {'api_key_capture': True, 'api_key_id': 7, 'api_key': 'sk-secret', 'api_key_name': 'worker',
+                                'api_key_prefix': 'sk-secre', 'api_key_last4': 'cret',
+                                'api_key_fingerprint': hashlib.sha256(b'sk-secret').hexdigest()},
+                   'data_base64': ''}]
+        with patch.object(self.api, 'query', return_value=[{'archive_key': 'pack'}]), \
+             patch.object(self.api, 'read_object', return_value=b'pack'), \
+             patch.object(self.api, 'read_pack', side_effect=lambda _: iter(events)):
+            response = self.client.get('/v1/captures/'+capture, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['api_key']['api_key_id'], 7)
+            self.assertEqual(response.json()['api_key']['api_key'], 'sk-secret')
 
 
 if __name__ == '__main__':

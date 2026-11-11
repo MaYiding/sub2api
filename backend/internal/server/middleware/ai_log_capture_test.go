@@ -12,12 +12,65 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ailog"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
-type aiLogTestSink struct{ events []ailog.Event }
+type aiLogTestSink struct {
+	events         []ailog.Event
+	includeAPIKeys bool
+}
 
 func (s *aiLogTestSink) Submit(e ailog.Event) bool { s.events = append(s.events, e); return true }
+func (s *aiLogTestSink) IncludeAPIKeys() bool      { return s.includeAPIKeys }
+
+func TestAILogCaptureRecordsAPIKeyForInternalQuery(t *testing.T) {
+	s := &aiLogTestSink{includeAPIKeys: true}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), &service.APIKey{ID: 7, UserID: 11, Key: "sk-internal-test-key-1234567890", Name: "worker"})
+		c.Next()
+	})
+	router.Use(aiLogCapture(s, "test"))
+	router.POST("/v1/messages", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}")))
+
+	start := s.events[0]
+	if got := start.Metadata["api_key"]; got != "sk-internal-test-key-1234567890" {
+		t.Fatalf("api_key metadata = %v", got)
+	}
+	if got := start.Metadata["api_key_capture"]; got != true {
+		t.Fatalf("api_key_capture metadata = %v", got)
+	}
+	if got := start.Metadata["api_key_id"]; got != int64(7) {
+		t.Fatalf("api_key_id metadata = %v", got)
+	}
+	if got := start.Metadata["api_key_prefix"]; got != "sk-inter" {
+		t.Fatalf("api_key_prefix metadata = %v", got)
+	}
+	if got := start.Metadata["api_key_last4"]; got != "7890" {
+		t.Fatalf("api_key_last4 metadata = %v", got)
+	}
+}
+
+func TestAILogCaptureDoesNotRecordCredentialWithoutOptIn(t *testing.T) {
+	s := &aiLogTestSink{}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), &service.APIKey{ID: 7, UserID: 11, Key: "sk-secret", Name: "worker"})
+		c.Next()
+	})
+	router.Use(aiLogCapture(s, "test"))
+	router.POST("/v1/messages", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}")))
+
+	if _, ok := s.events[0].Metadata["api_key"]; ok {
+		t.Fatal("api_key metadata recorded without explicit opt-in")
+	}
+	if _, ok := s.events[0].Metadata["api_key_capture"]; ok {
+		t.Fatal("api_key_capture marker recorded without explicit opt-in")
+	}
+}
 
 func TestAILogCapturePreservesSSEAndExcludesCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)

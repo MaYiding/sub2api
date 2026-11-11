@@ -14,6 +14,9 @@ AI_LOG_ENABLED=true
 AI_LOG_SOURCE_ID=sub2api-production
 AI_LOG_SPOOL_DIR=/app/ai-log-spool
 AI_LOG_SPOOL_MAX_BYTES=21474836480
+# Restricted internal deployment only: retain the authenticated key in
+# capture.start metadata so the query API can match it exactly.
+AI_LOG_INCLUDE_API_KEYS=true
 # Optional, default false: copy upstream attempt bodies too.
 AI_LOG_UPSTREAM_BODIES=false
 ```
@@ -83,8 +86,15 @@ refuses to change source/topic/spool in place and never clears existing WAL.
   that the client never transmitted; an Agent SDK should supply explicit run
   and parent-span identifiers for those events.
 - Arbitrary headers, Authorization, cookies and URL query strings are not
-  copied. Content inside user/tool messages is retained and must be treated as
-  private data; this is not a universal secret detector.
+  copied. In the restricted internal deployment, the authenticated Sub2API
+  API key is added to `capture.start` metadata as `api_key` when
+  `AI_LOG_INCLUDE_API_KEYS=true`, together with its
+  ID, name, prefix, last four characters and fingerprint, so Kafka/ClickHouse
+  operators can query by the exact key. This makes every downstream log and
+  archive a credential-bearing store; keep the query bearer token and storage
+  access private and never expose the query service publicly. Content inside
+  user/tool messages is retained and must be treated as private data; this is
+  not a universal secret detector.
 - `capture.end` distinguishes incomplete reads, cancellation, write errors and
   loss. `dropped_events` counts events refused by the memory queue;
   `wal_dropped_events` (present only when nonzero) counts events of this

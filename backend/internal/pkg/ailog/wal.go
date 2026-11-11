@@ -31,6 +31,11 @@ const (
 // client-facing request and response already hold the conversation.
 const UpstreamBodiesEnv = "AI_LOG_UPSTREAM_BODIES"
 
+// IncludeAPIKeysEnv is an explicit opt-in for the restricted internal
+// deployment. It is false by default so enabling AI logs elsewhere does not
+// turn the Kafka/archive pipeline into a credential store accidentally.
+const IncludeAPIKeysEnv = "AI_LOG_INCLUDE_API_KEYS"
+
 type walRecord struct {
 	data    []byte
 	capture string
@@ -46,6 +51,7 @@ type WAL struct {
 	dir       string
 	maxBytes  int64
 	bodies    bool
+	apiKeys   bool
 	queue     chan walRecord
 	queued    atomic.Int64
 	dropped   atomic.Uint64
@@ -72,6 +78,14 @@ func Default() (*WAL, string) {
 		if dir == "" || !filepath.IsAbs(dir) || defaultSource == "" || len(defaultSource) > 128 {
 			panic("AI_LOG_ENABLED requires an absolute AI_LOG_SPOOL_DIR and AI_LOG_SOURCE_ID (1..128 bytes)")
 		}
+		apiKeys := false
+		switch value := os.Getenv(IncludeAPIKeysEnv); value {
+		case "", "false":
+		case "true":
+			apiKeys = true
+		default:
+			panic(IncludeAPIKeysEnv + " must be true or false")
+		}
 		bodies := false
 		switch value := os.Getenv(UpstreamBodiesEnv); value {
 		case "", "false":
@@ -94,6 +108,7 @@ func Default() (*WAL, string) {
 			panic(fmt.Errorf("initialize AI log WAL: %w", err))
 		}
 		defaultWAL.bodies = bodies
+		defaultWAL.apiKeys = apiKeys
 	})
 	return defaultWAL, defaultSource
 }
@@ -139,6 +154,10 @@ func NewWAL(dir string, maxBytes int64) (*WAL, error) {
 
 // UpstreamBodies reports whether upstream attempt bodies are copied.
 func (w *WAL) UpstreamBodies() bool { return w != nil && w.bodies }
+
+// IncludeAPIKeys reports whether this sink is explicitly allowed to put the
+// authenticated Sub2API credential in the AI-log metadata stream.
+func (w *WAL) IncludeAPIKeys() bool { return w != nil && w.apiKeys }
 
 func (w *WAL) Submit(e Event) bool {
 	if w == nil {
