@@ -54,12 +54,21 @@ ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS source_binding_revision UInt
 -- API-key lookup projections. The source event still carries the same values
 -- in metadata_json; these columns make exact-key and ID filters readable and
 -- indexable without parsing the full JSON object for every row.
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_id Int64 DEFAULT JSONExtractInt(metadata_json, 'api_key_id');
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key String DEFAULT JSONExtractString(metadata_json, 'api_key');
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_name String DEFAULT JSONExtractString(metadata_json, 'api_key_name');
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_prefix String DEFAULT JSONExtractString(metadata_json, 'api_key_prefix');
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_last4 String DEFAULT JSONExtractString(metadata_json, 'api_key_last4');
-ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_fingerprint String DEFAULT JSONExtractString(metadata_json, 'api_key_fingerprint');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_id Int64 DEFAULT simpleJSONExtractInt(metadata_json, 'api_key_id');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key String DEFAULT simpleJSONExtractString(metadata_json, 'api_key');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_name String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_name');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_prefix String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_prefix');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_last4 String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_last4');
+ALTER TABLE ai_logs.events ADD COLUMN IF NOT EXISTS api_key_fingerprint String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_fingerprint');
+-- Existing installations may already have these columns with the old
+-- JSONExtract defaults.  MODIFY keeps schema application idempotent while
+-- making reads portable on hosts without the simdjson CPU path.
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key_id Int64 DEFAULT simpleJSONExtractInt(metadata_json, 'api_key_id');
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key String DEFAULT simpleJSONExtractString(metadata_json, 'api_key');
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key_name String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_name');
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key_prefix String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_prefix');
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key_last4 String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_last4');
+ALTER TABLE ai_logs.events MODIFY COLUMN api_key_fingerprint String DEFAULT simpleJSONExtractString(metadata_json, 'api_key_fingerprint');
 ALTER TABLE ai_logs.events ADD INDEX IF NOT EXISTS api_key_id_bloom api_key_id TYPE bloom_filter(0.01) GRANULARITY 4;
 ALTER TABLE ai_logs.events ADD INDEX IF NOT EXISTS api_key_bloom api_key TYPE bloom_filter(0.01) GRANULARITY 4;
 
