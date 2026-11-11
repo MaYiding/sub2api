@@ -86,9 +86,9 @@ def _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, ap
 def _request_columns():
     return """source_id,capture_id,trace_id,event_time,
         api_key,api_key_id,api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint,
-        simpleJSONExtractString(metadata_json, 'route') AS route,
-        simpleJSONExtractString(metadata_json, 'method') AS method,
-        simpleJSONExtractString(metadata_json, 'request_id') AS request_id"""
+        extract(metadata_json, '\"route\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS route,
+        extract(metadata_json, '\"method\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS method,
+        extract(metadata_json, '\"request_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS request_id"""
 
 
 def _public_api_key_metadata(metadata):

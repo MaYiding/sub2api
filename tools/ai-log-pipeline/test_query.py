@@ -65,6 +65,13 @@ class QueryIsolationTests(unittest.TestCase):
             self.assertIn('e.api_key_id = {api_key_id:Int64}', sql)
             self.assertEqual(parameters['api_key_id'], 7)
 
+    def test_request_columns_extract_json_strings_without_simdjson(self):
+        columns = self.api._request_columns()
+        self.assertIn('extract(metadata_json, \'"route"[[:space:]]*:[[:space:]]*"([^\"]*)"\') AS route', columns)
+        self.assertIn('extract(metadata_json, \'"method"[[:space:]]*:[[:space:]]*"([^\"]*)"\') AS method', columns)
+        self.assertIn('extract(metadata_json, \'"request_id"[[:space:]]*:[[:space:]]*"([^\"]*)"\') AS request_id', columns)
+        self.assertNotIn('JSONExtractString', columns)
+
     def test_api_key_stats_uses_distinct_capture_ids(self):
         with patch.object(self.api, 'query', return_value=[]) as query:
             response = self.client.get('/v1/api-keys/stats', params={'window_seconds': 3600}, headers=self.headers)
