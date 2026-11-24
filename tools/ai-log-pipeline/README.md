@@ -99,6 +99,40 @@ complete. An absent end marker or recorded drops means an incomplete capture.
 `GET /v1/archive/{archive_key}` downloads a checksummed pack for operator export.
 All data routes require a bearer token; `/healthz` returns only process health.
 
+When the Sub2API source sets `AI_LOG_INCLUDE_API_KEYS=true`, the restricted
+internal deployment puts the authenticated `api_key` in `capture.start`
+metadata. That value therefore exists in Kafka clean events, ClickHouse, and
+raw archive packs. Treat those stores and the query bearer token as
+credential-bearing assets; do not expose the query API outside the internal
+network. The metadata also includes `api_key_id`, `api_key_name`,
+`api_key_prefix`, `api_key_last4`, and `api_key_fingerprint`. The switch is
+false by default.
+
+For recent requests, use `GET /v1/requests/latest`. Filter with `api_key_id`,
+`api_key_name`, `api_key_prefix`, `api_key_last4`, or
+`api_key_fingerprint`. To match an exact key, send it in the
+`X-Sub2API-Key` header; the key is never placed in the URL. The response
+contains the capture ID and the captured key metadata, and the capture endpoint
+can then replay the complete request. Both endpoints accept `window_seconds`
+(default one day; `0` covers everything ClickHouse still retains), `limit`, and
+`source_id`.
+
+`GET /v1/api-keys/stats` counts captures per API key: one row per key per
+source, with the latest recorded name and key, `request_count` (distinct
+captures) and first/last seen in UTC. A key is listed only if the window holds
+its key. A relay older than `AI_LOG_INCLUDE_API_KEYS` records only
+`api_key_id`: its requests count under the key when that key is recorded
+later in the window, and otherwise do not appear. The default `mode=full`
+returns every field; `mode=brief` keeps only `api_key_name`, `api_key` and
+`request_count`. The response carries `truncated: true` only when more keys
+than `limit` matched.
+
+Rows indexed before the `api_key_*` projections existed hold no stored value
+for them, and on a host without the JSON runtime their DEFAULT reads as 0. The
+query API falls back to the `api_key_id` in `metadata_json` for those rows.
+Captures indexed before the cleaner passed plaintext keys through hold the
+literal `[REDACTED]` in storage; it is reported as not recorded.
+
 If the ClickHouse catalog is lost, apply `schema.sql` and run:
 
 ```sh

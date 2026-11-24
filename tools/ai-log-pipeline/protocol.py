@@ -7,6 +7,7 @@ import json
 import uuid
 
 SENSITIVE = {'authorization', 'cookie', 'set-cookie', 'api_key', 'access_token', 'refresh_token', 'password', 'secret', 'client_secret'}
+API_KEY_CAPTURE_MARKER = 'api_key_capture'
 GEAR = [int.from_bytes(hashlib.sha256(bytes([i])).digest()[:8], 'big') for i in range(256)]
 
 
@@ -18,7 +19,21 @@ def scrub_metadata(value, depth=0):
     if depth > 16:
         raise ValueError('metadata nesting exceeds schema limit')
     if isinstance(value, dict):
-        return {key: '[REDACTED]' if key.lower() in SENSITIVE else scrub_metadata(item, depth+1) for key, item in value.items()}
+        # A plaintext API key is allowed only when the authenticated source
+        # explicitly opts in at the top level.  The marker is deliberately
+        # scoped to this dictionary: a nested object cannot smuggle a key
+        # through by adding its own marker.
+        allow_api_key = depth == 0 and value.get(API_KEY_CAPTURE_MARKER) is True
+        cleaned = {}
+        for key, item in value.items():
+            lowered = key.lower()
+            if lowered == 'api_key' and allow_api_key and isinstance(item, str):
+                cleaned[key] = item
+            elif lowered in SENSITIVE:
+                cleaned[key] = '[REDACTED]'
+            else:
+                cleaned[key] = scrub_metadata(item, depth+1)
+        return cleaned
     if isinstance(value, list):
         return [scrub_metadata(item, depth+1) for item in value]
     return value

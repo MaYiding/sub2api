@@ -94,6 +94,24 @@ if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_UPSTREAM_BODIES=true'; the
   echo 'inherited upstream body setting must not shadow the override' >&2; exit 1
 fi
 unset AI_LOG_UPSTREAM_BODIES
+
+# Plaintext API-key capture is also inherited and can be overridden per rollout.
+mock_include_keys=true
+docker_inspect_value() {
+  case "$2" in
+    *Config.Env*) printf '%s\n' AI_LOG_ENABLED=true AI_LOG_SOURCE_ID=existing-source "AI_LOG_INCLUDE_API_KEYS=$mock_include_keys" ;;
+    *Mounts*) printf '%s\n' "$capture_dir" ;;
+  esac
+}
+build_env_args
+printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_INCLUDE_API_KEYS=true'
+AI_LOG_INCLUDE_API_KEYS=false
+build_env_args
+printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_INCLUDE_API_KEYS=false'
+if printf '%s\n' "${ENV_ARGS[@]}" | grep -Fxq 'AI_LOG_INCLUDE_API_KEYS=true'; then
+  echo 'inherited plaintext API-key setting must not shadow the override' >&2; exit 1
+fi
+unset AI_LOG_INCLUDE_API_KEYS
 echo 'blue-green shared AI log spool test passed'
 
 # A repeated run with the active image is a no-op; any other image deploys.

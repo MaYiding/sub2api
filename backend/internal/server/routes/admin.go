@@ -667,14 +667,9 @@ func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAut
 
 func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	system := admin.Group("/system")
-	{
-		system.GET("/version", h.Admin.System.GetVersion)
-		system.GET("/check-updates", h.Admin.System.CheckUpdates)
-		system.GET("/rollback-versions", h.Admin.System.GetRollbackVersions)
-		system.POST("/update", h.Admin.System.PerformUpdate)
-		system.POST("/rollback", h.Admin.System.Rollback)
-		system.POST("/restart", h.Admin.System.RestartService)
-	}
+	// 只保留版本查询。在线更新会下载上游发行版的二进制就地替换，把本定制的采集逻辑一并覆盖，
+	// 回滚和重启接口同理；本部署只通过替换镜像来升级。
+	system.GET("/version", h.Admin.System.GetVersion)
 }
 
 func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

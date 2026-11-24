@@ -176,8 +176,25 @@ def archiver(config):
         client.close()
 
 
+def _api_key_id(value):
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value > 0 else 0
+    if isinstance(value, str) and value.isdecimal():
+        parsed = int(value)
+        return parsed if parsed > 0 else 0
+    return 0
+
+
+def _metadata_string(value):
+    return value if isinstance(value, str) else ''
+
+
 def event_row(event, message):
-    return {'tenant_id': event['tenant_id'], 'source_id': event['source_id'], 'trace_id': event['trace_id'], 'capture_id': event['capture_id'], 'event_id': event['event_id'], 'event_time': event['timestamp'], 'sequence': event['sequence'], 'kind': event['kind'], 'source_name': event.get('source_name', ''), 'source_region': event.get('source_region', ''), 'source_verified': int(event.get('source_verified', False)), 'raw_topic': event.get('raw_topic', ''), 'raw_partition': event.get('raw_partition', 0), 'raw_offset': event.get('raw_offset', 0), 'source_binding_revision': event.get('source_binding_revision', 0), 'message_id': event.get('message_id', ''), 'part': event.get('part', 0), 'parts': event.get('parts', 0), 'body_sha256': event['body_sha256'], 'body_bytes': event['body_bytes'], 'metadata_json': json.dumps(event['metadata'], ensure_ascii=False), 'kafka_partition': message.partition(), 'kafka_offset': message.offset(), 'version': message.offset()+1}
+    metadata = event['metadata']
+    captured_key = metadata.get('api_key_capture') is True
+    return {'tenant_id': event['tenant_id'], 'source_id': event['source_id'], 'trace_id': event['trace_id'], 'capture_id': event['capture_id'], 'event_id': event['event_id'], 'event_time': event['timestamp'], 'sequence': event['sequence'], 'kind': event['kind'], 'source_name': event.get('source_name', ''), 'source_region': event.get('source_region', ''), 'source_verified': int(event.get('source_verified', False)), 'raw_topic': event.get('raw_topic', ''), 'raw_partition': event.get('raw_partition', 0), 'raw_offset': event.get('raw_offset', 0), 'source_binding_revision': event.get('source_binding_revision', 0), 'message_id': event.get('message_id', ''), 'part': event.get('part', 0), 'parts': event.get('parts', 0), 'body_sha256': event['body_sha256'], 'body_bytes': event['body_bytes'], 'metadata_json': json.dumps(metadata, ensure_ascii=False), 'api_key_id': _api_key_id(metadata.get('api_key_id')), 'api_key': _metadata_string(metadata.get('api_key')) if captured_key else '', 'api_key_name': _metadata_string(metadata.get('api_key_name')), 'api_key_prefix': _metadata_string(metadata.get('api_key_prefix')) if captured_key else '', 'api_key_last4': _metadata_string(metadata.get('api_key_last4')) if captured_key else '', 'api_key_fingerprint': _metadata_string(metadata.get('api_key_fingerprint')) if captured_key else '', 'kafka_partition': message.partition(), 'kafka_offset': message.offset(), 'version': message.offset()+1}
 
 
 def indexer(config):

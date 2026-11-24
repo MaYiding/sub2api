@@ -47,11 +47,29 @@ class ProtocolTests(unittest.TestCase):
 
     def test_metadata_credentials_removed_bodies_not_summarized(self):
         body = b'{"secret":"user supplied tool output must remain intact"}'
-        value = event(body, tenant_id='attacker', metadata={'Authorization': 'bearer secret', 'nested': [{'password': 'secret'}]})
+        value = event(body, tenant_id='attacker', metadata={'Authorization': 'bearer secret', 'api_key': 'unmarked', 'nested': [{'password': 'secret', 'api_key': 'nested'}]})
         self.assertEqual(value['tenant_id'], 'default')
         self.assertEqual(value['metadata']['Authorization'], '[REDACTED]')
+        self.assertEqual(value['metadata']['api_key'], '[REDACTED]')
         self.assertEqual(value['metadata']['nested'][0]['password'], '[REDACTED]')
+        self.assertEqual(value['metadata']['nested'][0]['api_key'], '[REDACTED]')
         self.assertEqual(base64.b64decode(value['data_base64']), body)
+
+    def test_explicit_top_level_api_key_capture_survives_cleaning(self):
+        value = event(metadata={
+            'api_key_capture': True,
+            'api_key': 'sk-internal-test-key',
+            'nested': {'api_key_capture': True, 'api_key': 'nested-must-redact'},
+        })
+        self.assertEqual(value['metadata']['api_key_capture'], True)
+        self.assertEqual(value['metadata']['api_key'], 'sk-internal-test-key')
+        self.assertEqual(value['metadata']['nested']['api_key'], '[REDACTED]')
+
+    def test_api_key_capture_marker_must_be_boolean_true(self):
+        for marker in (False, 1, 'true'):
+            with self.subTest(marker=marker):
+                value = event(metadata={'api_key_capture': marker, 'api_key': 'must-redact'})
+                self.assertEqual(value['metadata']['api_key'], '[REDACTED]')
 
     def test_invalid_schema_and_oversized_frames_rejected(self):
         for changes in ({'sequence': True}, {'message_id': {}}, {'parts': 2, 'part': 2}, {'timestamp': '2026-10-09'}, {'schema_version': 99}):
