@@ -30,9 +30,10 @@ RECORDED_KEY = "if(e.api_key = '" + REDACTED + "', '', e.api_key)"
 # The newest non-empty value is the one to show for a key: a rename, or a relay
 # upgrade that starts recording names and keys, must not split one key in two.
 LATEST_KEY = "argMaxIf(e.api_key, e.event_time, e.api_key NOT IN ('', '" + REDACTED + "')) AS api_key"
-STATS_NOTE = ('One row per API key per source. request_count counts distinct captures whose capture.start falls in '
-              'the window; name and key are the latest recorded for that key; times are UTC. A relay that predates key '
-              'capture only records api_key_id, so its keys have an empty name and key until it is upgraded.')
+# Rows indexed before the api_key_* projections existed hold no stored value, and on a host without the JSON
+# runtime their DEFAULT reads as 0. The metadata still carries the id, so fall back to reading it from there.
+KEY_ID = ("if(e.api_key_id > 0, e.api_key_id, toInt64OrZero(extract(metadata_json, "
+          "'\"api_key_id\"[[:space:]]*:[[:space:]]*([0-9]+)')))")
 
 
 def tenant(authorization: str = Header(default='')):
@@ -70,9 +71,7 @@ def _recent_capture_filters(filters, parameters, owner, seconds, source_id):
 
 
 def _brief_stat(row):
-    """Name, key and count. A key its relay never named stays identifiable."""
-    name = row['api_key_name'] or f"(unnamed api_key_id={row['api_key_id']} at {row['source_id']})"
-    return {'api_key_name': name, 'api_key': row['api_key'], 'request_count': row['request_count']}
+    return {field: row[field] for field in ('api_key_name', 'api_key', 'request_count')}
 
 
 def _validate_source(source_id):
@@ -94,7 +93,7 @@ def _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, ap
         raise HTTPException(400, 'Invalid API key fingerprint')
     filters, parameters = [], {}
     if api_key_id is not None:
-        filters.append("e.api_key_id = {api_key_id:Int64}")
+        filters.append(KEY_ID + " = {api_key_id:Int64}")
         parameters['api_key_id'] = api_key_id
     if api_key_name:
         if len(api_key_name) > 100:
@@ -122,7 +121,8 @@ def _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, ap
 
 def _request_columns():
     return """source_id,capture_id,trace_id,event_time,""" + RECORDED_KEY + """ AS api_key,
-        api_key_id,api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint,
+        """ + KEY_ID + """ AS api_key_id,
+        api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint,
         extract(metadata_json, '"route"[[:space:]]*:[[:space:]]*"([^"]*)"') AS route,
         extract(metadata_json, '"method"[[:space:]]*:[[:space:]]*"([^"]*)"') AS method,
         extract(metadata_json, '"request_id"[[:space:]]*:[[:space:]]*"([^"]*)"') AS request_id"""
@@ -233,17 +233,19 @@ def api_key_stats(owner=Depends(tenant), source_id: str = '', api_key_id: int | 
                   api_key_fingerprint: str = '', window_seconds: int = Query(default=86400, ge=0, le=180*86400),
                   limit: int = Query(default=100, ge=1, le=1000), mode: Literal['full', 'brief'] = 'full',
                   api_key: str = Header(default='', alias='X-Sub2API-Key')):
-    """Count recent captures per API key.
+    """Count captures per API key.
 
-    `full` keeps every field. `brief` keeps only api_key_name, api_key and
-    request_count. One more row than `limit` is read to report `truncated`.
+    A key is listed only if the window holds its key: a relay that predates key
+    capture adds its counts under the key id but never gets a row of its own.
+    `full` keeps every field, `brief` keeps api_key_name, api_key and
+    request_count, and `truncated` is present only when rows were cut.
     """
     source_id = _validate_source(source_id)
     filters, parameters = _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, api_key_fingerprint, api_key)
     _recent_capture_filters(filters, parameters, owner, window_seconds, source_id)
-    filters.append("e.api_key_id > 0")
+    filters.append(KEY_ID + " > 0")
     parameters['limit'] = limit+1
-    rows = query("""SELECT e.source_id, e.api_key_id,
+    rows = query("""SELECT e.source_id, """ + KEY_ID + """ AS api_key_id,
         argMaxIf(e.api_key_name, e.event_time, e.api_key_name != '') AS api_key_name,
         """ + LATEST_KEY + """,
         argMaxIf(e.api_key_prefix, e.event_time, e.api_key_prefix != '') AS api_key_prefix,
@@ -252,11 +254,15 @@ def api_key_stats(owner=Depends(tenant), source_id: str = '', api_key_id: int | 
         uniqExact(e.capture_id) AS request_count,
         min(e.event_time) AS first_seen, max(e.event_time) AS last_seen
         FROM ai_logs.events AS e FINAL WHERE """ + ' AND '.join(filters) +
-        " GROUP BY e.source_id, e.api_key_id ORDER BY request_count DESC, last_seen DESC, e.source_id, e.api_key_id LIMIT {limit:UInt32}", parameters)
+        " GROUP BY e.source_id, " + KEY_ID + " HAVING api_key != ''"
+        " ORDER BY request_count DESC, last_seen DESC, e.source_id, api_key_id LIMIT {limit:UInt32}", parameters)
     truncated, rows = len(rows) > limit, rows[:limit]
     if mode == 'brief':
         rows = [_brief_stat(row) for row in rows]
-    return {'stats': rows, 'window_seconds': window_seconds, 'limit': limit, 'mode': mode, 'truncated': truncated, 'note': STATS_NOTE}
+    response = {'stats': rows, 'window_seconds': window_seconds, 'limit': limit, 'mode': mode}
+    if truncated:
+        response['truncated'] = True
+    return response
 
 
 @APP.get('/v1/archive/{key:path}')

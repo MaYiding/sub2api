@@ -117,18 +117,21 @@ can then replay the complete request. Both endpoints accept `window_seconds`
 (default one day; `0` covers everything ClickHouse still retains), `limit`, and
 `source_id`.
 
-`GET /v1/api-keys/stats` counts recent captures per API key: one row per key
-per source, with the latest recorded name and key, `request_count` (distinct
-captures) and first/last seen in UTC. `truncated` is true when more keys than
-`limit` matched. The default `mode=full` returns every field; `mode=brief`
-keeps only `api_key_name`, `api_key` and `request_count`, and a key whose
-relay never recorded a name is listed as `(unnamed api_key_id=... at <source>)`.
+`GET /v1/api-keys/stats` counts captures per API key: one row per key per
+source, with the latest recorded name and key, `request_count` (distinct
+captures) and first/last seen in UTC. A key is listed only if the window holds
+its key. A relay older than `AI_LOG_INCLUDE_API_KEYS` records only
+`api_key_id`: its requests count under the key when that key is recorded
+later in the window, and otherwise do not appear. The default `mode=full`
+returns every field; `mode=brief` keeps only `api_key_name`, `api_key` and
+`request_count`. The response carries `truncated: true` only when more keys
+than `limit` matched.
 
-A relay older than `AI_LOG_INCLUDE_API_KEYS` records only `api_key_id`, so its
-keys appear with an empty name and key until that relay is upgraded. Captures
-indexed before the cleaner passed plaintext keys through hold the literal
-`[REDACTED]` in storage; the query API reports them as not recorded and counts
-them under their key.
+Rows indexed before the `api_key_*` projections existed hold no stored value
+for them, and on a host without the JSON runtime their DEFAULT reads as 0. The
+query API falls back to the `api_key_id` in `metadata_json` for those rows.
+Captures indexed before the cleaner passed plaintext keys through hold the
+literal `[REDACTED]` in storage; it is reported as not recorded.
 
 If the ClickHouse catalog is lost, apply `schema.sql` and run:
 
