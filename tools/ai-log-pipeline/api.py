@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import Response
@@ -18,6 +19,20 @@ APP = FastAPI(title='AI Log Archive', docs_url=None, redoc_url=None, openapi_url
 
 API_KEY_MAX_BYTES = 128
 API_KEY_FINGERPRINT = re.compile(r'[0-9a-f]{64}')
+# protocol.scrub_metadata replaced `api_key` with this literal until the
+# api_key_capture opt-in existed. Captures indexed while a cleaner still ran
+# that version keep the literal in ClickHouse and in archive packs. It is a
+# marker that the key was withheld, never a key value.
+REDACTED = '[REDACTED]'
+# Withheld keys read as "not recorded"; a filter still compares the stored
+# column so the api_key bloom index stays usable.
+RECORDED_KEY = "if(e.api_key = '" + REDACTED + "', '', e.api_key)"
+# The newest non-empty value is the one to show for a key: a rename, or a relay
+# upgrade that starts recording names and keys, must not split one key in two.
+LATEST_KEY = "argMaxIf(e.api_key, e.event_time, e.api_key NOT IN ('', '" + REDACTED + "')) AS api_key"
+STATS_NOTE = ('One row per API key per source. request_count counts distinct captures whose capture.start falls in '
+              'the window; name and key are the latest recorded for that key; times are UTC. A relay that predates key '
+              'capture only records api_key_id, so its keys have an empty name and key until it is upgraded.')
 
 
 def tenant(authorization: str = Header(default='')):
@@ -36,6 +51,28 @@ def query(sql, parameters):
 
 def _cutoff(seconds):
     return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
+def _recent_capture_filters(filters, parameters, owner, seconds, source_id):
+    """Bind tenant, capture.start and the time window shared by the key lookups.
+
+    A window of 0 seconds has no lower bound: it covers everything ClickHouse
+    still retains instead of returning only events from this instant on.
+    """
+    filters.extend(["e.tenant_id = {tenant:String}", "e.kind = 'capture.start'"])
+    parameters['tenant'] = owner
+    if seconds:
+        filters.append("e.event_time >= parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')")
+        parameters['cutoff'] = _cutoff(seconds)
+    if source_id:
+        parameters['source'] = source_id
+        filters.append("e.source_id = {source:String}")
+
+
+def _brief_stat(row):
+    """Name, key and count. A key its relay never named stays identifiable."""
+    name = row['api_key_name'] or f"(unnamed api_key_id={row['api_key_id']} at {row['source_id']})"
+    return {'api_key_name': name, 'api_key': row['api_key'], 'request_count': row['request_count']}
 
 
 def _validate_source(source_id):
@@ -84,11 +121,11 @@ def _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, ap
 
 
 def _request_columns():
-    return """source_id,capture_id,trace_id,event_time,
-        api_key,api_key_id,api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint,
-        extract(metadata_json, '\"route\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS route,
-        extract(metadata_json, '\"method\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS method,
-        extract(metadata_json, '\"request_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"') AS request_id"""
+    return """source_id,capture_id,trace_id,event_time,""" + RECORDED_KEY + """ AS api_key,
+        api_key_id,api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint,
+        extract(metadata_json, '"route"[[:space:]]*:[[:space:]]*"([^"]*)"') AS route,
+        extract(metadata_json, '"method"[[:space:]]*:[[:space:]]*"([^"]*)"') AS method,
+        extract(metadata_json, '"request_id"[[:space:]]*:[[:space:]]*"([^"]*)"') AS request_id"""
 
 
 def _public_api_key_metadata(metadata):
@@ -96,7 +133,7 @@ def _public_api_key_metadata(metadata):
         return None
     result = {}
     for field in ('api_key', 'api_key_id', 'api_key_name', 'api_key_prefix', 'api_key_last4', 'api_key_fingerprint'):
-        if field == 'api_key' and metadata.get('api_key_capture') is not True:
+        if field == 'api_key' and (metadata.get('api_key_capture') is not True or metadata.get('api_key') == REDACTED):
             continue
         if field in metadata:
             result[field] = metadata[field]
@@ -183,11 +220,8 @@ def latest_requests(owner=Depends(tenant), source_id: str = '', api_key_id: int 
     """
     source_id = _validate_source(source_id)
     filters, parameters = _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, api_key_fingerprint, api_key)
-    filters.extend(["e.tenant_id = {tenant:String}", "e.kind = 'capture.start'", "e.event_time >= parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')"])
-    parameters.update({'tenant': owner, 'cutoff': _cutoff(window_seconds), 'limit': limit})
-    if source_id:
-        filters.append("e.source_id = {source:String}")
-        parameters['source'] = source_id
+    _recent_capture_filters(filters, parameters, owner, window_seconds, source_id)
+    parameters['limit'] = limit
     rows = query('SELECT '+_request_columns()+" FROM ai_logs.events AS e FINAL WHERE " + ' AND '.join(filters) + ' ORDER BY event_time DESC, capture_id DESC LIMIT {limit:UInt32}', parameters)
     return {'requests': rows, 'window_seconds': window_seconds, 'limit': limit,
             'note': 'Rows are capture.start events; use /v1/captures/{capture_id} for complete replay.'}
@@ -197,25 +231,32 @@ def latest_requests(owner=Depends(tenant), source_id: str = '', api_key_id: int 
 def api_key_stats(owner=Depends(tenant), source_id: str = '', api_key_id: int | None = Query(default=None, ge=1),
                   api_key_name: str = '', api_key_prefix: str = '', api_key_last4: str = '',
                   api_key_fingerprint: str = '', window_seconds: int = Query(default=86400, ge=0, le=180*86400),
-                  limit: int = Query(default=100, ge=1, le=1000),
+                  limit: int = Query(default=100, ge=1, le=1000), mode: Literal['full', 'brief'] = 'full',
                   api_key: str = Header(default='', alias='X-Sub2API-Key')):
-    """Count recent captures grouped by API key identity."""
+    """Count recent captures per API key.
+
+    `full` keeps every field. `brief` keeps only api_key_name, api_key and
+    request_count. One more row than `limit` is read to report `truncated`.
+    """
     source_id = _validate_source(source_id)
     filters, parameters = _api_key_filters(api_key_id, api_key_name, api_key_prefix, api_key_last4, api_key_fingerprint, api_key)
-    filters.extend(["e.tenant_id = {tenant:String}", "e.kind = 'capture.start'", "e.event_time >= parseDateTime64BestEffort({cutoff:String}, 3, 'UTC')",
-                    "e.api_key_id > 0"])
-    parameters.update({'tenant': owner, 'cutoff': _cutoff(window_seconds), 'limit': limit})
-    if source_id:
-        filters.append("e.source_id = {source:String}")
-        parameters['source'] = source_id
-    rows = query("""SELECT e.source_id,
-        e.api_key, e.api_key_id, e.api_key_name, e.api_key_prefix, e.api_key_last4, e.api_key_fingerprint,
+    _recent_capture_filters(filters, parameters, owner, window_seconds, source_id)
+    filters.append("e.api_key_id > 0")
+    parameters['limit'] = limit+1
+    rows = query("""SELECT e.source_id, e.api_key_id,
+        argMaxIf(e.api_key_name, e.event_time, e.api_key_name != '') AS api_key_name,
+        """ + LATEST_KEY + """,
+        argMaxIf(e.api_key_prefix, e.event_time, e.api_key_prefix != '') AS api_key_prefix,
+        argMaxIf(e.api_key_last4, e.event_time, e.api_key_last4 != '') AS api_key_last4,
+        argMaxIf(e.api_key_fingerprint, e.event_time, e.api_key_fingerprint != '') AS api_key_fingerprint,
         uniqExact(e.capture_id) AS request_count,
         min(e.event_time) AS first_seen, max(e.event_time) AS last_seen
         FROM ai_logs.events AS e FINAL WHERE """ + ' AND '.join(filters) +
-        " GROUP BY e.source_id,api_key,api_key_id,api_key_name,api_key_prefix,api_key_last4,api_key_fingerprint ORDER BY request_count DESC,last_seen DESC LIMIT {limit:UInt32}", parameters)
-    return {'stats': rows, 'window_seconds': window_seconds, 'limit': limit,
-            'note': 'Counts distinct capture IDs from capture.start events.'}
+        " GROUP BY e.source_id, e.api_key_id ORDER BY request_count DESC, last_seen DESC, e.source_id, e.api_key_id LIMIT {limit:UInt32}", parameters)
+    truncated, rows = len(rows) > limit, rows[:limit]
+    if mode == 'brief':
+        rows = [_brief_stat(row) for row in rows]
+    return {'stats': rows, 'window_seconds': window_seconds, 'limit': limit, 'mode': mode, 'truncated': truncated, 'note': STATS_NOTE}
 
 
 @APP.get('/v1/archive/{key:path}')

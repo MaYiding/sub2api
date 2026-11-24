@@ -113,11 +113,22 @@ For recent requests, use `GET /v1/requests/latest`. Filter with `api_key_id`,
 `api_key_fingerprint`. To match an exact key, send it in the
 `X-Sub2API-Key` header; the key is never placed in the URL. The response
 contains the capture ID and the captured key metadata, and the capture endpoint
-can then replay the complete request. `GET /v1/api-keys/stats` returns recent
-distinct capture counts grouped by key. Both endpoints accept `window_seconds`,
-`limit`, and `source_id` filters. Captures created before plaintext-key capture
-was enabled have no `api_key` field and must be selected with their recorded
-`api_key_id` or trace.
+can then replay the complete request. Both endpoints accept `window_seconds`
+(default one day; `0` covers everything ClickHouse still retains), `limit`, and
+`source_id`.
+
+`GET /v1/api-keys/stats` counts recent captures per API key: one row per key
+per source, with the latest recorded name and key, `request_count` (distinct
+captures) and first/last seen in UTC. `truncated` is true when more keys than
+`limit` matched. The default `mode=full` returns every field; `mode=brief`
+keeps only `api_key_name`, `api_key` and `request_count`, and a key whose
+relay never recorded a name is listed as `(unnamed api_key_id=... at <source>)`.
+
+A relay older than `AI_LOG_INCLUDE_API_KEYS` records only `api_key_id`, so its
+keys appear with an empty name and key until that relay is upgraded. Captures
+indexed before the cleaner passed plaintext keys through hold the literal
+`[REDACTED]` in storage; the query API reports them as not recorded and counts
+them under their key.
 
 If the ClickHouse catalog is lost, apply `schema.sql` and run:
 
